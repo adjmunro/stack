@@ -195,7 +195,7 @@ fn detached_head_needs_an_explicit_branch() {
 }
 
 #[test]
-fn unpin_and_trunk_remove_undo_setup() {
+fn unpin_and_trunk_remove_leave_only_the_op_log_behind() {
     let fixture = repo();
     let before = fixture.snapshot();
     stack(&fixture, &["trunk", "add", "develop"]);
@@ -207,14 +207,14 @@ fn unpin_and_trunk_remove_undo_setup() {
         "Removed trunk develop\n"
     );
 
-    // Only the now-unreferenced metadata blobs remain, for git gc to collect.
+    // The op log, and the keep tree holding both metadata blobs so undo can restore them after gc.
     let diff = before.diff(&fixture.snapshot());
+    assert_eq!(diff.refs.keys().collect::<Vec<_>>(), ["refs/stack/keep"]);
+    assert_eq!(diff.stack.iter().collect::<Vec<_>>(), ["stack.db"]);
     assert!(
-        diff.refs.is_empty()
-            && diff.head.is_none()
-            && diff.index.is_empty()
-            && diff.worktree.is_empty(),
+        diff.head.is_none() && diff.index.is_empty() && diff.worktree.is_empty(),
         "{diff}"
     );
-    assert_eq!(diff.objects_added.len(), 2);
+    // Two metadata blobs, and one keep tree after each removal.
+    assert_eq!(diff.objects_added.len(), 4);
 }

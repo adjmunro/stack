@@ -44,12 +44,30 @@ pub enum Error {
     #[error("corrupt metadata in {reference}: {reason}")]
     CorruptMetadata { reference: String, reason: String },
 
+    #[error("nothing to undo")]
+    NothingToUndo,
+
+    #[error("nothing to redo")]
+    NothingToRedo,
+
+    /// `reference` changed after the operation being undone or redone, so reverting it would lose that change.
+    #[error("{reference} has changed since; undo or redo would overwrite that change")]
+    UndoConflict { reference: String },
+
+    /// The op log (SQLite) failed.
+    #[error("op log: {0}")]
+    Store(BoxError),
+
     /// The underlying git backend failed.
     #[error("git: {0}")]
     Git(BoxError),
 }
 
 impl Error {
+    pub(crate) fn store(error: impl Into<BoxError>) -> Self {
+        Self::Store(error.into())
+    }
+
     pub(crate) fn git(error: impl Into<BoxError>) -> Self {
         Self::Git(error.into())
     }

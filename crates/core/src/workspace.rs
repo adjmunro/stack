@@ -3,16 +3,19 @@ use std::path::Path;
 use serde::Serialize;
 
 use crate::git::{GitRepo, GixRepo, RefUpdate};
+use crate::journal::Journal;
 use crate::metadata::{self, Link, Mark, Metadata};
 use crate::resolve::Resolution;
-use crate::{Error, Head, Outcome, Role, Status, Tree};
+use crate::{Error, Head, Operation, OperationKind, Outcome, Recovered, Role, Status, Tree};
 
 /// Entry point for all `stack` operations on one repository.
 ///
-/// Queries never write. Mutations are compare-and-swap: each fails without changes if the metadata it read was
-/// changed concurrently.
+/// Queries never write. Mutations are compare-and-swap (each fails without changes if the metadata it read was
+/// changed concurrently) and journalled in the op log, so they can be undone and survive a crash part-way through.
 pub struct Workspace {
     git: Box<dyn GitRepo>,
+    journal: Journal,
+    recovered: Vec<Recovered>,
 }
 
 /// The result of [`Workspace::add_trunk`].
@@ -34,14 +37,46 @@ pub struct Pinned {
 }
 
 impl Workspace {
-    /// Opens the repository containing `path`, searching parent directories like `git` does.
+    /// Opens the repository containing `path`, searching parent directories like `git` does, and resolves any
+    /// operation a previous run left interrupted (see [`Self::recovered`]).
     ///
     /// # Errors
     /// [`Error::NotARepository`] if no repository is found.
     pub fn discover(path: impl AsRef<Path>) -> Result<Self, Error> {
+        let git = GixRepo::discover(path.as_ref())?;
+        let journal = Journal::new(git.common_dir().join("stack").join("stack.db"));
+        let recovered = journal.recover(&git)?;
         Ok(Self {
-            git: Box::new(GixRepo::discover(path.as_ref())?),
+            git: Box::new(git),
+            journal,
+            recovered,
         })
+    }
+
+    /// Interrupted operations resolved when this workspace was opened.
+    pub fn recovered(&self) -> &[Recovered] {
+        &self.recovered
+    }
+
+    /// Reverts the latest command that isn't already undone. Returns that command.
+    ///
+    /// # Errors
+    /// [`Error::NothingToUndo`], or [`Error::UndoConflict`] if a ref it changed has changed again since.
+    pub fn undo(&self) -> Result<Operation, Error> {
+        self.journal.undo(&*self.git)
+    }
+
+    /// Re-applies the most recently undone command, as long as no command has run since. Returns that command.
+    ///
+    /// # Errors
+    /// [`Error::NothingToRedo`], or [`Error::UndoConflict`] if a ref it changed has changed again since.
+    pub fn redo(&self) -> Result<Operation, Error> {
+        self.journal.redo(&*self.git)
+    }
+
+    /// The most recent operations, newest first.
+    pub fn oplog(&self, limit: usize) -> Result<Vec<Operation>, Error> {
+        self.journal.recent(limit)
     }
 
     /// Creates an empty git repository at `path` with `git init`.
@@ -135,7 +170,8 @@ impl Workspace {
             Role::Trunk
         };
         let blob = self.git.write_blob(&metadata::encode(&Mark { role }))?;
-        let outcome = self.update(format!("{}{name}", metadata::TRUNKS), None, Some(blob))?;
+        let reference = format!("{}{name}", metadata::TRUNKS);
+        let outcome = self.update(&format!("trunk add {name}"), reference, None, Some(blob))?;
         Ok(marked(outcome, role, parent))
     }
 
@@ -149,8 +185,10 @@ impl Workspace {
             .marks
             .get(name)
             .ok_or_else(|| Error::NotTrunk { name: name.into() })?;
+        let reference = format!("{}{name}", metadata::TRUNKS);
         self.update(
-            format!("{}{name}", metadata::TRUNKS),
+            &format!("trunk remove {name}"),
+            reference,
             Some(stored.id.clone()),
             None,
         )?;
@@ -221,7 +259,13 @@ impl Workspace {
         }
         let blob = self.git.write_blob(&metadata::encode(&link))?;
         let old = old.map(|stored| stored.id.clone());
-        let outcome = self.update(format!("{}{branch}", metadata::BRANCHES), old, Some(blob))?;
+        let reference = format!("{}{branch}", metadata::BRANCHES);
+        let outcome = self.update(
+            &format!("pin {branch} on {}", link.parent),
+            reference,
+            old,
+            Some(blob),
+        )?;
         Ok(Pinned { outcome, parent })
     }
 
@@ -238,8 +282,10 @@ impl Workspace {
             .ok_or_else(|| Error::NotPinned {
                 name: branch.into(),
             })?;
+        let reference = format!("{}{branch}", metadata::BRANCHES);
         self.update(
-            format!("{}{branch}", metadata::BRANCHES),
+            &format!("unpin {branch}"),
+            reference,
             Some(stored.id.clone()),
             None,
         )
@@ -266,11 +312,19 @@ impl Workspace {
 
     fn update(
         &self,
+        description: &str,
         name: String,
         old: Option<String>,
         new: Option<String>,
     ) -> Result<Outcome, Error> {
-        self.git.update_refs(&[RefUpdate { name, old, new }])?;
+        let updates = vec![RefUpdate { name, old, new }];
+        self.journal.transact(
+            &*self.git,
+            OperationKind::Command,
+            description,
+            None,
+            updates,
+        )?;
         Ok(Outcome::Changed)
     }
 }

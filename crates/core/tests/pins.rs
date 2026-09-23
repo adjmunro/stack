@@ -135,9 +135,13 @@ fn unpin_deletes_only_the_record() {
     let diff = before.diff(&fixture.snapshot());
     assert_eq!(
         diff.refs.keys().collect::<Vec<_>>(),
-        ["refs/stack/branches/a"]
+        ["refs/stack/branches/a", "refs/stack/keep"]
     );
-    assert!(diff.objects_added.is_empty() && diff.objects_removed.is_empty());
+    // The old blob moves into the keep tree so undo can restore it after gc.
+    assert_eq!(
+        (diff.objects_added.len(), diff.objects_removed.len()),
+        (1, 0)
+    );
     assert_eq!(
         parent(&tree(&fixture), "a").unwrap().source,
         Source::Derived

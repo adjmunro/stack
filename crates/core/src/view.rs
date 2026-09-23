@@ -89,3 +89,66 @@ pub enum Outcome {
     /// The repository already matched the request.
     Unchanged,
 }
+
+/// A recorded `stack` mutation, for the op log.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct Operation {
+    pub id: i64,
+    pub kind: OperationKind,
+    /// What was run, e.g. `pin feat/b on feat/a`.
+    pub description: String,
+    /// For an undo or redo, the command it applied to.
+    pub target: Option<i64>,
+    pub state: OperationState,
+    /// For a command, whether it is currently undone.
+    pub undone: bool,
+    /// Seconds since the epoch.
+    pub started_at: i64,
+    /// Every ref the operation changed, sorted by name.
+    pub changes: Vec<RefChange>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum OperationKind {
+    Command,
+    Undo,
+    Redo,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum OperationState {
+    /// Recorded but not finished: interrupted, or still running.
+    Pending,
+    Done,
+    /// Nothing was changed.
+    Failed,
+}
+
+/// One ref's change. `None` means the ref didn't (or doesn't) exist.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct RefChange {
+    pub name: String,
+    pub old: Option<String>,
+    pub new: Option<String>,
+}
+
+/// An interrupted operation found and resolved when the workspace was opened.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct Recovered {
+    pub operation: i64,
+    pub description: String,
+    pub outcome: RecoveryOutcome,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RecoveryOutcome {
+    /// Every ref already had its new value; the operation is now marked done.
+    Completed,
+    /// Every ref still had its old value; the operation is now marked failed.
+    RolledBack,
+    /// Refs are a mix of old and new values, or neither. Left pending for a human to resolve.
+    Inconsistent,
+}

@@ -1,7 +1,7 @@
 //! The `GitRepo` port and its adapters.
 
 use std::collections::HashMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use gix::refs::transaction::{Change, LogChange, PreviousValue, RefEdit, RefLog};
 use gix::refs::{FullName, Target};
@@ -49,7 +49,22 @@ pub(crate) struct RefUpdate {
 
 /// All git access from the core goes through this trait. Object ids are full hex SHAs.
 pub(crate) trait GitRepo: Send + Sync {
+    /// The directory shared by all worktrees (`git rev-parse --git-common-dir`).
+    fn common_dir(&self) -> PathBuf;
+
     fn head(&self) -> Result<Head, Error>;
+
+    /// The object a ref points at directly (no peeling), or `None` if it doesn't exist.
+    ///
+    /// # Errors
+    /// [`Error::Git`] for a symbolic ref.
+    fn ref_value(&self, name: &str) -> Result<Option<String>, Error>;
+
+    /// The ids of the entries of a tree.
+    fn tree_entries(&self, tree: &str) -> Result<Vec<String>, Error>;
+
+    /// Writes a flat tree holding `blobs`, each named by its own id.
+    fn write_blob_tree(&self, blobs: &[String]) -> Result<String, Error>;
 
     /// The commit at `refs/heads/<name>`, or `None` if there is no such branch.
     fn branch_tip(&self, name: &str) -> Result<Option<String>, Error>;
@@ -106,6 +121,57 @@ impl GixRepo {
 }
 
 impl GitRepo for GixRepo {
+    fn common_dir(&self) -> PathBuf {
+        self.repo.to_thread_local().common_dir().to_owned()
+    }
+
+    fn ref_value(&self, name: &str) -> Result<Option<String>, Error> {
+        let repo = self.repo.to_thread_local();
+        let Some(reference) = repo
+            .try_find_reference(&full_name(name)?)
+            .map_err(Error::git)?
+        else {
+            return Ok(None);
+        };
+        match reference.target() {
+            gix::refs::TargetRef::Object(id) => Ok(Some(id.to_string())),
+            gix::refs::TargetRef::Symbolic(_) => {
+                Err(Error::git(format!("{name} is a symbolic ref")))
+            }
+        }
+    }
+
+    fn tree_entries(&self, tree: &str) -> Result<Vec<String>, Error> {
+        let repo = self.repo.to_thread_local();
+        let tree = repo.find_tree(object_id(tree)?).map_err(Error::git)?;
+        let decoded = tree.decode().map_err(Error::git)?;
+        Ok(decoded
+            .entries
+            .iter()
+            .map(|entry| entry.oid.to_string())
+            .collect())
+    }
+
+    fn write_blob_tree(&self, blobs: &[String]) -> Result<String, Error> {
+        let repo = self.repo.to_thread_local();
+        let mut entries = blobs
+            .iter()
+            .map(|blob| {
+                Ok(gix::objs::tree::Entry {
+                    mode: gix::objs::tree::EntryKind::Blob.into(),
+                    filename: blob.as_str().into(),
+                    oid: object_id(blob)?,
+                })
+            })
+            .collect::<Result<Vec<_>, Error>>()?;
+        entries.sort();
+        entries.dedup();
+        let id = repo
+            .write_object(gix::objs::Tree { entries })
+            .map_err(Error::git)?;
+        Ok(id.to_string())
+    }
+
     fn head(&self) -> Result<Head, Error> {
         let repo = self.repo.to_thread_local();
         let head = repo.head().map_err(Error::git)?;

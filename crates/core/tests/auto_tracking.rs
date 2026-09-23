@@ -413,9 +413,13 @@ mod trunks {
         let diff = before.diff(&fixture.snapshot());
         assert_eq!(
             diff.refs.keys().collect::<Vec<_>>(),
-            ["refs/stack/trunks/release"]
+            ["refs/stack/keep", "refs/stack/trunks/release"]
         );
-        assert!(diff.objects_added.is_empty() && diff.objects_removed.is_empty());
+        // The old blob moves into the keep tree so undo can restore it after gc.
+        assert_eq!(
+            (diff.objects_added.len(), diff.objects_removed.len()),
+            (1, 0)
+        );
         assert_eq!(shape(&tree(&fixture)), "develop(release(fix))");
     }
 
