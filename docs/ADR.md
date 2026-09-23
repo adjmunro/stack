@@ -57,3 +57,20 @@
 - Detail: `base` is the merge base of the branch and its parent when tracked. Restack will use it to find the branch's own commits.
 - Detail: Unknown `version`s are rejected as corrupt, never rewritten.
 - Reason: Blob refs don't appear in `git log --all`, survive `gc`, and pass `fsck` (verified by tests). One ref per item keeps compare-and-swap updates independent and allows per-branch sync later.
+
+2026-09-23T12:00Z@585d2fb8
+- Category: parent resolution
+- Detail: Auto-tracking replaces `track`/`untrack`. Recorded parents (refs) hold intent; the commit graph holds current state; the two are reconciled on every read.
+- Detail: A recorded parent holds while the branch contains some version of it: the parent's current tip, a former tip (git reflog, or tips `stack` has observed, kept in SQLite), or commits with matching patch-ids. Otherwise it is re-derived from the graph and the change reported.
+- Detail: Unrecorded parents are derived as the nearest branch whose tip is an ancestor, never walking past a trunk. Branches on the same commit: the older is the parent; a child that can't choose takes the oldest. Age: first reflog entry, then first observed by `stack`, then name.
+- Detail: `stack pin` records a parent manually. Pins never change automatically; a contradicted pin is flagged.
+- Detail: Reads never write refs. Derived parents are recorded by the next `stack` mutation.
+- Detail: Rename metadata `base` to `offshoot` (format unreleased; version stays 1).
+- Reason: Graphite-style explicit tracking drifts when other tools change the repo. Pure derivation loses intent (empty branches, content-changing amends, parallel branches with identical patch-ids).
+
+2026-09-23T12:00Z@585d2fb8
+- Category: branch roles and scopes
+- Detail: Trunks have no parent and are never rebased or pushed by `stack`. Limbs have a parent and act as bases for branches leafward of them.
+- Detail: Restack runs leafward from a branch, through limbs.
+- Detail: Push defaults to the current branch's line: parents rootward up to the nearest trunk or limb, plus descendants leafward up to the next limbs. Trunks, limbs, and siblings are excluded. `--rootward` and `--leafward` narrow it to one direction.
+- Reason: A limb may belong to someone else, so ranges never push it. Restack must pass through limbs because their commits sit on the branch being moved.

@@ -21,6 +21,13 @@
 
 ## Long Horizon Tasks
 
+2026-09-23T12:00Z@585d2fb8:
+- Blockers: NO BLOCKERS
+- Where: crates/core (metadata, workspace, new derivation module), crates/cli
+- What: Auto-tracking per ADR "parent resolution": derive parents from the graph, reconcile with recorded parents, replace `track`/`untrack` with `pin`/`unpin`. Rename `base` → `offshoot`.
+- What: Limbs: `stack limb add|remove`; stored under `refs/stack/limbs/`.
+- What: Tests: parallel branches with identical patch-ids never steal a child; same-commit tie-breaks; changes made with plain git behind `stack`'s back; amended/rebased parent before restack.
+
 2026-09-23T10:37Z@507992a:
 - Blockers: NO BLOCKERS
 - Where: crates/core
