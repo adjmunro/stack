@@ -92,7 +92,8 @@
 - Detail: Trunks are never rebased or pushed by `stack`. Limbs are restacked with their parent.
 - Detail: Restack runs leafward from a branch through every descendant, limbs included, except archived, backup, and ignored branches.
 - Detail: Push and PR commands default to the current branch's line: the branch, its parents rootward up to the nearest trunk or limb (excluded), and its descendants leafward up to and including the next limbs. Siblings of the branch and its parents are excluded.
-- Detail: `--to-leaves` extends the leafward part past limbs to the leaves. `--rootward` and `--leafward` narrow the line to one direction.
+- Detail: On a limb, the line is the limb and its descendants up to the next limbs (its own stack); nothing rootward.
+- Detail: `--all`/`-a` extends the leafward part past limbs to the leaves. `--rootward` and `--leafward` narrow the line to one direction.
 - Detail: Pushing branches and opening PRs are separate commands, so a wide push (e.g. a backup) never opens a wave of PRs.
 - Reason: A rootward limb may be someone else's; a leafward limb is yours but starts a separate batch of review work.
 - Reason: A release branch cut from a trunk looks the same as a checkpoint on a trunk. Treating both as trunks means the failure mode is "not auto-restacked", never "release branch rebased onto develop".
