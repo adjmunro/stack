@@ -7,8 +7,8 @@ use std::process::ExitCode;
 use clap::{Parser, Subcommand};
 use serde_json::{Value, to_value};
 use stack_core::{
-    Error, Head, Marked, Node, Operation, OperationState, Outcome, RecoveryOutcome, Role, Source,
-    Tree, Workspace,
+    Error, Head, Marked, Node, Operation, OperationState, Outcome, RecoveryOutcome, Restacked,
+    Role, Source, Tree, Workspace,
 };
 
 type Result<T, E = Box<dyn std::error::Error>> = std::result::Result<T, E>;
@@ -57,6 +57,11 @@ enum Command {
     /// Remove a pin, so the parent is worked out automatically again.
     Unpin {
         /// Branch to unpin [default: current branch].
+        branch: Option<String>,
+    },
+    /// Rebase a branch and everything stacked on it onto their parents' current tips.
+    Restack {
+        /// Branch to restack; a trunk restacks every stack on it [default: current branch].
         branch: Option<String>,
     },
     /// Revert the latest stack command.
@@ -151,6 +156,14 @@ fn run(cli: &Cli) -> Result<()> {
             let outcome = workspace.unpin(&branch)?;
             print(to_value(outcome)?, format!("Unpinned {branch}"));
         }
+        Command::Restack { branch } => {
+            let branch = branch_or_current(&workspace, branch.as_deref())?;
+            let restacked = workspace.restack(&branch)?;
+            print(to_value(&restacked)?, describe_restack(&restacked));
+            if let Some(conflict) = &restacked.conflict {
+                return Err(format!("restack stopped at a conflict in {}", conflict.branch).into());
+            }
+        }
         Command::Undo => {
             let undone = workspace.undo()?;
             print(
@@ -199,6 +212,50 @@ fn discover(directory: &Path) -> Result<Workspace> {
         );
     }
     Ok(workspace)
+}
+
+fn describe_restack(restacked: &Restacked) -> String {
+    let mut lines: Vec<String> = restacked
+        .moved
+        .iter()
+        .map(|moved| {
+            let plural = if moved.replayed == 1 { "" } else { "s" };
+            let dropped = match moved.dropped {
+                0 => String::new(),
+                count => format!("; {count} already in {}", moved.onto),
+            };
+            format!(
+                "Restacked {} onto {} ({} commit{plural}{dropped})",
+                moved.name, moved.onto, moved.replayed
+            )
+        })
+        .collect();
+    match &restacked.conflict {
+        Some(conflict) => {
+            let paths = conflict.paths.join(", ");
+            lines.push(format!(
+                "Conflict: {} \"{}\" ({}) conflicts with {} in {paths}",
+                conflict.branch,
+                conflict.summary,
+                short(&conflict.commit),
+                conflict.onto
+            ));
+            lines.push(format!(
+                "Left {} and the branches on it as they were. To finish:",
+                conflict.branch
+            ));
+            lines.push(format!(
+                "  git rebase --onto {} {} {}",
+                conflict.onto,
+                short(&conflict.offshoot),
+                conflict.branch
+            ));
+            lines.push(format!("  stack restack {}", conflict.branch));
+        }
+        None if restacked.moved.is_empty() => lines.push("Everything is up to date.".to_owned()),
+        None => {}
+    }
+    lines.join("\n")
 }
 
 fn describe_operation(operation: &Operation) -> String {
