@@ -21,12 +21,16 @@
 
 ## Long Horizon Tasks
 
-2026-09-23T12:00Z@585d2fb8:
+2026-09-23T12:31Z@89920ef0:
+- Blockers: SQLite
+- Where: crates/core/src/resolve.rs (Resolver::reconcile, Resolver::derive)
+- What: Former parent versions for unrecorded links: record observed branch tips in SQLite on every read; use git reflog former tips only when patch-ids confirm them (a reset or `branch -f` must not create a parent). Flip test `unrecorded_parent_rewritten_falls_back_to_trunk`.
+
+2026-09-23T12:31Z@89920ef0:
 - Blockers: NO BLOCKERS
-- Where: crates/core (metadata, workspace, new derivation module), crates/cli
-- What: Auto-tracking per ADR "parent resolution": derive parents from the graph, reconcile with recorded parents, replace `track`/`untrack` with `pin`/`unpin`. Rename `base` → `offshoot`.
-- What: Limbs: infer role for `trunk add`-marked branches (parent is a regular branch → limb).
-- What: Tests: parallel branches with identical patch-ids never steal a child; same-commit tie-breaks; changes made with plain git behind `stack`'s back; amended/rebased parent before restack.
+- Where: crates/core/src/resolve.rs, crates/core/src/git.rs
+- What: Performance: one walk per branch plus pairwise `merge_base`; unrelated histories (e.g. `gh-pages`) walk everything. Consider one shared walk and the commit-graph. Add a benchmark fixture first.
+- What: Prune `refs/stack/branches/*` records for deleted branches during mutations.
 
 2026-09-23T10:37Z@507992a:
 - Blockers: NO BLOCKERS
