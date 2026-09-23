@@ -1,5 +1,6 @@
 //! The `GitRepo` port and its adapters.
 
+use std::collections::HashMap;
 use std::path::Path;
 
 use gix::refs::transaction::{Change, LogChange, PreviousValue, RefEdit, RefLog};
@@ -14,6 +15,17 @@ pub(crate) struct Branch {
     pub tip: String,
     /// Seconds since the epoch of the branch's first reflog entry, if it has a reflog.
     pub created: Option<i64>,
+    /// Commits the branch pointed at before, from its reflog, oldest first. Excludes the current tip and the commit
+    /// it was created from with `git branch`/`git switch --create`.
+    pub former: Vec<FormerTip>,
+}
+
+/// A commit a branch used to point at.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct FormerTip {
+    pub id: String,
+    /// The reflog message of the update that moved the branch off this commit, e.g. `commit (amend): …`.
+    pub left_by: String,
 }
 
 /// A ref that points directly at a blob, with the blob's contents.
@@ -60,6 +72,10 @@ pub(crate) trait GitRepo: Send + Sync {
 
     /// Commits reachable from `tip` but not from any of `hidden` (`git rev-list tip --not hidden...`).
     fn commits_excluding(&self, tip: &str, hidden: &[String]) -> Result<Vec<String>, Error>;
+
+    /// The stable `git patch-id` of each commit's diff against its first parent, keyed by commit. Merge commits and
+    /// empty commits have none.
+    fn patch_ids(&self, commits: &[String]) -> Result<HashMap<String, String>, Error>;
 
     /// Every ref under `prefix` (which must end in `/`).
     ///
@@ -150,18 +166,28 @@ impl GitRepo for GixRepo {
         for reference in platform.local_branches().map_err(Error::git)? {
             let reference = reference.map_err(Error::git)?;
             let name = reference.name().shorten().to_string();
-            let created = match reference.log_iter().all().map_err(Error::git)? {
-                Some(mut lines) => match lines.next() {
-                    Some(line) => Some(line.map_err(Error::git)?.signature.seconds()),
-                    None => None,
-                },
-                None => None,
-            };
+            let mut entries = Vec::new();
+            if let Some(lines) = reference.log_iter().all().map_err(Error::git)? {
+                for line in lines {
+                    let line = line.map_err(Error::git)?;
+                    let seconds = line.signature.seconds();
+                    entries.push((
+                        line.new_oid().to_string(),
+                        line.message.to_string(),
+                        seconds,
+                    ));
+                }
+            }
             let tip = reference
                 .into_fully_peeled_id()
                 .map_err(Error::git)?
                 .to_string();
-            branches.push(Branch { name, tip, created });
+            branches.push(Branch {
+                created: entries.first().map(|(_, _, seconds)| *seconds),
+                former: former_tips(&entries, &tip),
+                name,
+                tip,
+            });
         }
         branches.sort_by(|a, b| a.name.cmp(&b.name));
         Ok(branches)
@@ -180,6 +206,37 @@ impl GitRepo for GixRepo {
             .map_err(Error::git)?;
         walk.map(|info| Ok(info.map_err(Error::git)?.id.to_string()))
             .collect()
+    }
+
+    fn patch_ids(&self, commits: &[String]) -> Result<HashMap<String, String>, Error> {
+        if commits.is_empty() {
+            return Ok(HashMap::new());
+        }
+        let git_dir = self.repo.to_thread_local().git_dir().to_owned();
+        let revisions = commits
+            .iter()
+            .map(|commit| format!("{commit}\n"))
+            .collect::<String>();
+        let log = run_git(
+            &git_dir,
+            &[
+                "log",
+                "--stdin",
+                "--no-walk=unsorted",
+                "--patch",
+                "--no-color",
+                "--no-ext-diff",
+                "--no-textconv",
+                "--format=commit %H",
+            ],
+            revisions.as_bytes(),
+        )?;
+        let ids = run_git(&git_dir, &["patch-id", "--stable"], &log)?;
+        Ok(String::from_utf8_lossy(&ids)
+            .lines()
+            .filter_map(|line| line.split_once(' '))
+            .map(|(patch, commit)| (commit.to_owned(), patch.to_owned()))
+            .collect())
     }
 
     fn merge_base(&self, one: &str, two: &str) -> Result<Option<String>, Error> {
@@ -263,6 +320,61 @@ impl GitRepo for GixRepo {
     }
 }
 
+/// Former tips from reflog `entries` of `(new id, message, seconds)`, oldest first.
+fn former_tips(entries: &[(String, String, i64)], tip: &str) -> Vec<FormerTip> {
+    let mut former: Vec<FormerTip> = Vec::new();
+    for (index, pair) in entries.windows(2).enumerate() {
+        let [(id, message, _), (_, left_by, _)] = pair else {
+            unreachable!("windows(2)")
+        };
+        // The commit a branch was created from belongs to whatever it was created from.
+        if (index == 0 && message.starts_with("branch: Created from")) || id == tip {
+            continue;
+        }
+        former.retain(|existing| existing.id != *id);
+        former.push(FormerTip {
+            id: id.clone(),
+            left_by: left_by.clone(),
+        });
+    }
+    former
+}
+
+/// Runs `git --git-dir=<git_dir> <args>` with `stdin`, returning stdout.
+fn run_git(git_dir: &Path, args: &[&str], stdin: &[u8]) -> Result<Vec<u8>, Error> {
+    use std::io::Write;
+    use std::process::{Command, Stdio};
+
+    let mut child = Command::new("git")
+        .arg("--git-dir")
+        .arg(git_dir)
+        .args(args)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(Error::git)?;
+    let mut input = child.stdin.take().expect("piped stdin");
+    let stdin = stdin.to_vec();
+    // Written from another thread so a large stdout can't deadlock against a full stdin pipe.
+    let writer = std::thread::spawn(move || input.write_all(&stdin));
+    let output = child.wait_with_output().map_err(Error::git)?;
+    writer
+        .join()
+        .expect("stdin writer doesn't panic")
+        .map_err(Error::git)?;
+    if output.status.success() {
+        Ok(output.stdout)
+    } else {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        Err(Error::git(format!(
+            "git {}: {}",
+            args.join(" "),
+            stderr.trim()
+        )))
+    }
+}
+
 /// Creates an empty repository at `path` with `git init`, honouring the user's git config (e.g.
 /// `init.defaultBranch`).
 pub(crate) fn create_repository(path: &Path) -> Result<(), Error> {
@@ -297,6 +409,29 @@ mod tests {
 
     fn repo(fixture: &Fixture) -> GixRepo {
         GixRepo::discover(&fixture.path()).unwrap()
+    }
+
+    #[test]
+    fn former_tips_skip_creation_point_and_current_tip() {
+        let entry = |id: &str, message: &str| (id.to_owned(), message.to_owned(), 0);
+        let entries = [
+            entry("base", "branch: Created from HEAD"),
+            entry("one", "commit: one"),
+            entry("two", "commit (amend): one"),
+            entry("one", "reset: moving to one"),
+            entry("three", "commit: three"),
+        ];
+
+        let former = former_tips(&entries, "three");
+
+        let pairs: Vec<(&str, &str)> = former
+            .iter()
+            .map(|tip| (tip.id.as_str(), tip.left_by.as_str()))
+            .collect();
+        assert_eq!(
+            pairs,
+            [("two", "reset: moving to one"), ("one", "commit: three")]
+        );
     }
 
     #[test]

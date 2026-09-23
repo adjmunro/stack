@@ -161,23 +161,82 @@ mod reconciliation {
         fixture.assert_unchanged(&before);
     }
 
-    /// Known gap: nothing is recorded until `stack` performs an operation, so an unrecorded link is lost when the
-    /// parent is rewritten. Observed tips (SQLite) will close this.
     #[test]
-    fn unrecorded_parent_rewritten_falls_back_to_trunk() {
+    fn unrecorded_parent_advanced_is_found_via_reflog() {
         let fixture = repo();
-        grow(&fixture, "a", "develop");
+        let old_a = grow(&fixture, "a", "develop");
         grow(&fixture, "b", "a");
         fixture.git(&["switch", "--quiet", "a"]);
+        fixture.commit("a2.txt", "a2", "feat: a2");
+
+        let tree = tree(&fixture);
+
+        assert_eq!(shape(&tree), "develop(a(b))");
+        let b = parent(&tree, "b").unwrap();
+        assert_eq!(
+            (b.source, b.offshoot, b.needs_restack),
+            (Source::Derived, old_a, true)
+        );
+    }
+
+    #[test]
+    fn unrecorded_parent_amended_is_found_via_reflog() {
+        let fixture = repo();
+        let old_a = grow(&fixture, "a", "develop");
+        grow(&fixture, "b", "a");
+        fixture.git(&["switch", "--quiet", "a"]);
+        fixture.write("a.txt", "amended");
         fixture.git(&[
             "commit",
             "--quiet",
+            "--all",
             "--amend",
             "--message",
             "feat: a (amended)",
         ]);
 
-        assert_eq!(shape(&tree(&fixture)), "develop(a b)");
+        assert_eq!(shape(&tree(&fixture)), "develop(a(b))");
+        assert_eq!(parent(&tree(&fixture), "b").unwrap().offshoot, old_a);
+    }
+
+    #[test]
+    fn unrecorded_parent_rebased_is_found_via_reflog() {
+        let fixture = repo();
+        grow(&fixture, "a", "develop");
+        grow(&fixture, "b", "a");
+        fixture.git(&["switch", "--quiet", "develop"]);
+        fixture.commit("later.txt", "later", "feat: later");
+        fixture.git(&["rebase", "--quiet", "develop", "a"]);
+
+        assert_eq!(shape(&tree(&fixture)), "develop(a(b))");
+        assert!(parent(&tree(&fixture), "b").unwrap().needs_restack);
+    }
+
+    #[test]
+    fn unrecorded_parent_rewritten_without_reflog_is_found_by_patch_id() {
+        let fixture = repo();
+        grow(&fixture, "a", "develop");
+        grow(&fixture, "b", "a");
+        fixture.git(&["switch", "--quiet", "--detach", "develop"]);
+        fixture.git(&["cherry-pick", "a"]);
+        // A tool that moves the branch without an amend/rebase reflog message.
+        fixture.git(&["branch", "--force", "a", "HEAD"]);
+
+        assert_eq!(shape(&tree(&fixture)), "develop(a(b))");
+    }
+
+    #[test]
+    fn branch_reset_away_does_not_become_a_parent() {
+        let fixture = repo();
+        grow(&fixture, "b", "develop");
+        let b1 = tip(&fixture, "b");
+        fixture.commit("b2.txt", "b2", "feat: b2");
+        fixture.git(&["switch", "--quiet", "--create", "temp", "develop"]);
+        fixture.git(&["reset", "--quiet", "--hard", &b1]);
+        fixture.git(&["reset", "--quiet", "--hard", "develop"]);
+        fixture.commit("temp.txt", "temp", "feat: temp");
+
+        assert_eq!(shape(&tree(&fixture)), "develop(b temp)");
     }
 
     #[test]

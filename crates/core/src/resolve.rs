@@ -1,7 +1,9 @@
 //! Works out every branch's parent from the commit graph and reconciles it with recorded parents.
 //!
-//! - **Derived** parent: the nearest branch whose tip is among this branch's own commits (those not in any trunk's
-//!   history), else the trunk with the latest merge base. Branches on the same commit: the older is the parent.
+//! - **Derived** parent: the nearest branch with a version among this branch's own commits (those not in any trunk's
+//!   history), else the trunk with the latest merge base. A version is the branch's tip, or a former tip (reflog)
+//!   it moved forward from, was amended or rebased off, or still carries a patch of. Branches on the same commit:
+//!   the older is the parent.
 //! - **Recorded** parent: holds while the branch contains some version of it (its tip, or the recorded offshoot)
 //!   and hasn't been moved onto a branch leafward of that version. Otherwise the derived parent replaces it.
 //! - **Pinned** parent: always holds while the parent exists; flagged when contradicted.
@@ -188,19 +190,33 @@ impl<'a> Resolver<'a> {
             return Ok(None);
         }
 
-        let candidates: Vec<&Branch> = self
-            .branches
-            .values()
-            .filter(|other| {
-                other.name != name && !self.is_trunk(&other.name) && own.contains(&other.tip)
-            })
-            .filter(|other| other.tip != branch.tip || age(other) < age(branch))
-            .collect();
-        let mut nearest: Vec<&Branch> = Vec::new();
+        // Each other branch with a version (its tip, or a confirmed former tip) among our own commits.
+        let mut candidates: Vec<(&Branch, String)> = Vec::new();
+        for other in self.branches.values() {
+            if other.name == name || self.is_trunk(&other.name) {
+                continue;
+            }
+            let mut latest: Option<String> = None;
+            let versions =
+                std::iter::once(&other.tip).chain(other.former.iter().map(|former| &former.id));
+            for version in versions.filter(|version| own.contains(*version)) {
+                if *version == branch.tip && age(other) >= age(branch) {
+                    continue;
+                }
+                if *version != other.tip && !self.is_former_version(other, version)? {
+                    continue;
+                }
+                latest = Some(self.later(latest, version.clone())?);
+            }
+            if let Some(version) = latest {
+                candidates.push((other, version));
+            }
+        }
+        let mut nearest: Vec<&(&Branch, String)> = Vec::new();
         for candidate in &candidates {
             let mut below_another = false;
             for other in &candidates {
-                if other.tip != candidate.tip && self.git.is_ancestor(&candidate.tip, &other.tip)? {
+                if other.1 != candidate.1 && self.git.is_ancestor(&candidate.1, &other.1)? {
                     below_another = true;
                     break;
                 }
@@ -209,8 +225,11 @@ impl<'a> Resolver<'a> {
                 nearest.push(candidate);
             }
         }
-        if let Some(parent) = nearest.into_iter().min_by_key(|candidate| age(candidate)) {
-            return Ok(Some(self.derived(parent, parent.tip.clone())));
+        if let Some((parent, version)) = nearest
+            .into_iter()
+            .min_by_key(|(candidate, _)| age(candidate))
+        {
+            return Ok(Some(self.derived(parent, version.clone())));
         }
 
         let mut best: Option<(&Branch, String)> = None;
@@ -227,6 +246,49 @@ impl<'a> Resolver<'a> {
             }
         }
         Ok(best.map(|(trunk, base)| self.derived(trunk, base)))
+    }
+
+    /// Whether `branch`'s former tip `version` is still a version of it, rather than a commit it was reset away from:
+    /// the branch moved forward from it, was amended or rebased off it, or still carries a commit with the same patch.
+    fn is_former_version(&self, branch: &Branch, version: &str) -> Result<bool, Error> {
+        if self.git.is_ancestor(version, &branch.tip)? {
+            return Ok(true);
+        }
+        let left_by = branch
+            .former
+            .iter()
+            .find(|former| former.id == version)
+            .map(|former| former.left_by.as_str());
+        if left_by.is_some_and(|message| {
+            message.starts_with("commit (amend)") || message.starts_with("rebase")
+        }) {
+            return Ok(true);
+        }
+        let current = self.git.commits_excluding(&branch.tip, &self.trunk_tips)?;
+        let mut hidden = self.trunk_tips.clone();
+        hidden.push(branch.tip.clone());
+        let left_behind = self.git.commits_excluding(version, &hidden)?;
+        if current.is_empty() || left_behind.is_empty() {
+            return Ok(false);
+        }
+        let current: HashSet<String> = self.git.patch_ids(&current)?.into_values().collect();
+        Ok(self
+            .git
+            .patch_ids(&left_behind)?
+            .values()
+            .any(|patch| current.contains(patch)))
+    }
+
+    /// Whichever of `current` and `candidate` is later in history; `current` if they're unrelated.
+    fn later(&self, current: Option<String>, candidate: String) -> Result<String, Error> {
+        Ok(match current {
+            Some(current)
+                if current == candidate || !self.git.is_ancestor(&current, &candidate)? =>
+            {
+                current
+            }
+            _ => candidate,
+        })
     }
 
     fn derived(&self, parent: &Branch, offshoot: String) -> Parent {
