@@ -21,6 +21,27 @@
 
 ## Long Horizon Tasks
 
+2026-09-23T10:37Z@507992a:
+- Blockers: NO BLOCKERS
+- Where: crates/core (metadata adapter), crates/testkit (Snapshot)
+- What: Metadata store in `refs/stack/` (branch parent, trunks). Extend `Snapshot` to cover `refs/stack/*` explicitly and `.git/stack/`.
+
+2026-09-23T10:37Z@507992a:
+- Blockers: metadata store
+- Where: crates/core
+- What: SQLite at `--git-common-dir`/stack; journal (intent → ref transaction → complete) with start-up recovery; op log + undo/redo.
+- What: Fault-injection tests: abort between each journal step, assert recovery leaves the repo in a before or after snapshot, never between.
+
+2026-09-23T10:37Z@507992a:
+- Blockers: metadata store
+- Where: crates/core (GitRepo port)
+- What: In-memory restack via `gix` tree merge. Differential tests against `git rebase` results; property tests (`proptest`) over random stacks.
+- What: Commit signing for in-memory commits, or defer signing until push (see IDEAS.md).
+
+2026-09-23T10:37Z@507992a:
+- Blockers: NO BLOCKERS
+- Where: crates/testkit
+- What: Fixture builder for stacks/branch graphs; clone fixture with a bare remote for push/fetch tests.
 
 
 ---
