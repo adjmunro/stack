@@ -68,9 +68,19 @@
 - Detail: Rename metadata `base` to `offshoot` (format unreleased; version stays 1).
 - Reason: Graphite-style explicit tracking drifts when other tools change the repo. Pure derivation loses intent (empty branches, content-changing amends, parallel branches with identical patch-ids).
 
-2026-09-23T12:00Z@585d2fb8
+~2026-09-23T12:00Z@585d2fb8~
 - Category: branch roles and scopes
+- Status: SUPERSEDED BY [2026-09-23T12:09Z@687b03d3]
 - Detail: Trunks have no parent and are never rebased or pushed by `stack`. Limbs have a parent and act as bases for branches leafward of them.
 - Detail: Restack runs leafward from a branch, through limbs.
 - Detail: Push defaults to the current branch's line: parents rootward up to the nearest trunk or limb, plus descendants leafward up to the next limbs. Trunks, limbs, and siblings are excluded. `--rootward` and `--leafward` narrow it to one direction.
 - Reason: A limb may belong to someone else, so ranges never push it. Restack must pass through limbs because their commits sit on the branch being moved.
+
+2026-09-23T12:09Z@687b03d3
+- Category: branch roles and scopes
+- Detail: `stack trunk add` marks both trunks and limbs; the role is inferred. A marked branch whose parent is a trunk (or that has none) is a trunk; one whose parent is a regular branch is a limb.
+- Detail: Trunks are never rebased or pushed by `stack`. Limbs are restacked with their parent.
+- Detail: Restack runs leafward from a branch, through limbs.
+- Detail: Push defaults to the current branch's line: the branch, its parents rootward up to the nearest trunk or limb (excluded), and all descendants leafward (limbs included). Siblings of the branch and its parents are excluded. `--rootward` and `--leafward` narrow it to one direction.
+- Reason: A rootward limb may be someone else's branch; a leafward one is almost certainly yours.
+- Reason: A release branch cut from a trunk looks the same as a checkpoint on a trunk. Treating both as trunks means the failure mode is "not auto-restacked", never "release branch rebased onto develop".
