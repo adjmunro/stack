@@ -6,7 +6,10 @@ use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
 use serde_json::{Value, to_value};
-use stack_core::{Error, Head, Marked, Node, Outcome, Role, Source, Tree, Workspace};
+use stack_core::{
+    Error, Head, Marked, Node, Operation, OperationState, Outcome, RecoveryOutcome, Role, Source,
+    Tree, Workspace,
+};
 
 type Result<T, E = Box<dyn std::error::Error>> = std::result::Result<T, E>;
 
@@ -56,6 +59,16 @@ enum Command {
         /// Branch to unpin [default: current branch].
         branch: Option<String>,
     },
+    /// Revert the latest stack command.
+    Undo,
+    /// Re-apply the most recently undone command.
+    Redo,
+    /// List recent stack operations, newest first.
+    Oplog {
+        /// How many to show.
+        #[arg(short = 'n', long, default_value_t = 20)]
+        limit: usize,
+    },
 }
 
 #[derive(Subcommand)]
@@ -99,7 +112,7 @@ fn run(cli: &Cli) -> Result<()> {
         print(value, human);
         return Ok(());
     }
-    let workspace = Workspace::discover(directory)?;
+    let workspace = discover(&directory)?;
     match &cli.command {
         Command::Init { .. } => unreachable!("handled above"),
         Command::Status => {
@@ -138,16 +151,83 @@ fn run(cli: &Cli) -> Result<()> {
             let outcome = workspace.unpin(&branch)?;
             print(to_value(outcome)?, format!("Unpinned {branch}"));
         }
+        Command::Undo => {
+            let undone = workspace.undo()?;
+            print(
+                to_value(&undone)?,
+                format!("Undid #{}: {}", undone.id, undone.description),
+            );
+        }
+        Command::Redo => {
+            let redone = workspace.redo()?;
+            print(
+                to_value(&redone)?,
+                format!("Redid #{}: {}", redone.id, redone.description),
+            );
+        }
+        Command::Oplog { limit } => {
+            let operations = workspace.oplog(*limit)?;
+            let human = if operations.is_empty() {
+                "No operations yet.".to_owned()
+            } else {
+                operations
+                    .iter()
+                    .map(describe_operation)
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            };
+            print(to_value(&operations)?, human);
+        }
     }
     Ok(())
 }
 
+/// Opens the workspace, reporting any interrupted operation it recovered on stderr.
+fn discover(directory: &Path) -> Result<Workspace> {
+    let workspace = Workspace::discover(directory)?;
+    for recovered in workspace.recovered() {
+        let outcome = match recovered.outcome {
+            RecoveryOutcome::Completed => "it had finished, and is now marked done",
+            RecoveryOutcome::RolledBack => "nothing had changed, and it is now marked failed",
+            RecoveryOutcome::Inconsistent => {
+                "refs are part-way between before and after; check `stack oplog`"
+            }
+        };
+        eprintln!(
+            "note: operation #{} ({}) was interrupted; {outcome}",
+            recovered.operation, recovered.description
+        );
+    }
+    Ok(workspace)
+}
+
+fn describe_operation(operation: &Operation) -> String {
+    let mut notes = Vec::new();
+    if operation.undone {
+        notes.push("undone");
+    }
+    match operation.state {
+        OperationState::Pending => notes.push("interrupted"),
+        OperationState::Failed => notes.push("failed"),
+        OperationState::Done => {}
+    }
+    let notes = if notes.is_empty() {
+        String::new()
+    } else {
+        format!(" ({})", notes.join(", "))
+    };
+    format!("#{} {}{notes}", operation.id, operation.description)
+}
+
 /// Sets up `stack`, creating a repository first if there isn't one and the user agrees.
 fn init(directory: &Path, trunks: &[String], yes: bool) -> Result<(Value, String)> {
-    let (workspace, created) = match Workspace::discover(directory) {
-        Err(Error::NotARepository { .. }) if yes || confirm_create(directory)? => {
+    let (workspace, created) = match discover(directory) {
+        Err(error) if matches!(error.downcast_ref(), Some(Error::NotARepository { .. })) => {
+            if !(yes || confirm_create(directory)?) {
+                return Err(error);
+            }
             Workspace::create_repository(directory)?;
-            (Workspace::discover(directory)?, true)
+            (discover(directory)?, true)
         }
         other => (other?, false),
     };

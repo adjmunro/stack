@@ -17,3 +17,4 @@ serde_json = { workspace = true, features = ["preserve_order"] }
 [dev-dependencies]
 stack-testkit.workspace = true
 tempfile.workspace = true
+rusqlite.workspace = true
