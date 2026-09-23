@@ -1,7 +1,8 @@
 use std::cell::Cell;
 use std::fs;
+use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
 
 use tempfile::TempDir;
 
@@ -42,16 +43,61 @@ impl Fixture {
 
     /// Runs `git` in the repo and returns trimmed stdout.
     pub fn git(&self, args: &[&str]) -> String {
-        let output = self.command("git").args(args).output().expect("spawn git");
+        self.git_in(&self.path(), args)
+    }
+
+    /// Runs `git` in `dir` (e.g. a remote) with the fixture's isolated environment and returns trimmed stdout.
+    pub fn git_in(&self, dir: &Path, args: &[&str]) -> String {
+        self.run(self.command("git").current_dir(dir).args(args), None)
+    }
+
+    /// Runs `git` in the repo with `stdin` piped in and returns trimmed stdout.
+    pub fn git_stdin(&self, args: &[&str], stdin: &[u8]) -> String {
+        self.run(self.command("git").args(args), Some(stdin))
+    }
+
+    fn run(&self, command: &mut Command, stdin: Option<&[u8]>) -> String {
+        command.stdin(if stdin.is_some() {
+            Stdio::piped()
+        } else {
+            Stdio::null()
+        });
+        command.stdout(Stdio::piped()).stderr(Stdio::piped());
+        let mut child = command.spawn().expect("spawn git");
+        if let Some(stdin) = stdin {
+            child
+                .stdin
+                .take()
+                .expect("piped stdin")
+                .write_all(stdin)
+                .expect("write git stdin");
+        }
+        let output = child.wait_with_output().expect("wait for git");
         assert!(
             output.status.success(),
-            "git {args:?} failed:\n{}",
+            "{command:?} failed:\n{}",
             String::from_utf8_lossy(&output.stderr)
         );
         String::from_utf8(output.stdout)
             .expect("git stdout is UTF-8")
             .trim()
             .to_owned()
+    }
+
+    /// Creates an empty bare repo beside the fixture and adds it as remote `name`. Returns its path.
+    pub fn add_bare_remote(&self, name: &str) -> PathBuf {
+        let remote = self.dir.path().join(format!("{name}.git"));
+        let remote_str = remote.to_str().expect("temp path is UTF-8");
+        self.git(&["init", "--quiet", "--bare", remote_str]);
+        self.git(&["remote", "add", name, remote_str]);
+        remote
+    }
+
+    /// A path beside the repo that doesn't exist yet, e.g. for a clone target.
+    pub fn scratch_path(&self, name: &str) -> PathBuf {
+        let path = self.dir.path().join(name);
+        assert!(!path.exists(), "{} already exists", path.display());
+        path
     }
 
     /// Writes `contents` to `path` (relative to the repo root), creating parent directories.
