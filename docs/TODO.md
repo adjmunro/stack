@@ -23,8 +23,8 @@
 
 2026-09-23T12:31Z@89920ef0:
 - Blockers: SQLite
-- Where: crates/core/src/resolve.rs (Resolver::reconcile, Resolver::derive)
-- What: Former parent versions for unrecorded links: record observed branch tips in SQLite on every read; use git reflog former tips only when patch-ids confirm them (a reset or `branch -f` must not create a parent). Flip test `unrecorded_parent_rewritten_falls_back_to_trunk`.
+- Where: crates/core/src/resolve.rs (Resolver::derive), crates/core/src/git.rs (Branch)
+- What: Record observed branch tips in SQLite on every read, as extra former tips (same gates) for branches whose reflog is missing or expired. Also first-observed time as the age fallback.
 
 2026-09-23T12:31Z@89920ef0:
 - Blockers: NO BLOCKERS
