@@ -54,6 +54,28 @@ pub enum Error {
     #[error("{reference} has changed since; undo or redo would overwrite that change")]
     UndoConflict { reference: String },
 
+    /// `branch` is checked out and has uncommitted changes to tracked files.
+    #[error("{branch} is checked out with uncommitted changes; commit or stash them first")]
+    DirtyWorktree { branch: String },
+
+    #[error("{branch} is checked out; switch to another branch first")]
+    DeletesCheckedOutBranch { branch: String },
+
+    /// `branch` is checked out in another worktree, which moving it would leave out of step.
+    #[error("{branch} is checked out in another worktree")]
+    CheckedOutElsewhere { branch: String },
+
+    /// `branch`'s recorded offshoot isn't in its history (e.g. it was pinned to a parent it isn't built on), so its
+    /// own commits can't be told apart.
+    #[error(
+        "can't restack {branch}: it isn't built on {parent}; pin it to the branch it is built on"
+    )]
+    OffshootNotInHistory { branch: String, parent: String },
+
+    /// Restack doesn't replay merge commits yet.
+    #[error("can't restack {branch}: it contains merge commit {commit}")]
+    MergeCommit { branch: String, commit: String },
+
     /// The op log (SQLite) failed.
     #[error("op log: {0}")]
     Store(BoxError),

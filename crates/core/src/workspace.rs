@@ -1,3 +1,4 @@
+use std::ffi::OsString;
 use std::path::Path;
 
 use serde::Serialize;
@@ -6,7 +7,9 @@ use crate::git::{GitRepo, GixRepo, RefUpdate};
 use crate::journal::Journal;
 use crate::metadata::{self, Link, Mark, Metadata};
 use crate::resolve::Resolution;
-use crate::{Error, Head, Operation, OperationKind, Outcome, Recovered, Role, Status, Tree};
+use crate::{
+    Error, Head, Moved, Operation, OperationKind, Outcome, Recovered, Restacked, Role, Status, Tree,
+};
 
 /// Entry point for all `stack` operations on one repository.
 ///
@@ -16,6 +19,20 @@ pub struct Workspace {
     git: Box<dyn GitRepo>,
     journal: Journal,
     recovered: Vec<Recovered>,
+}
+
+/// The environment `stack` runs `git` subprocesses with.
+///
+/// Only `git` subprocesses (merges, commits, working-tree updates, config lookups) use it; the in-process git
+/// library still reads this process's environment and the user's git config.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub enum Environment {
+    /// This process's environment, minus variables that would redirect `git` to another repository or index.
+    #[default]
+    Inherit,
+    /// Exactly these variables and no others: e.g. a GUI supplying the user's login-shell environment, or tests
+    /// sealing off the developer's git config.
+    Exactly(Vec<(OsString, OsString)>),
 }
 
 /// The result of [`Workspace::add_trunk`].
@@ -43,7 +60,15 @@ impl Workspace {
     /// # Errors
     /// [`Error::NotARepository`] if no repository is found.
     pub fn discover(path: impl AsRef<Path>) -> Result<Self, Error> {
-        let git = GixRepo::discover(path.as_ref())?;
+        Self::discover_with(path, Environment::Inherit)
+    }
+
+    /// As [`Self::discover`], running `git` with `environment` instead of this process's.
+    ///
+    /// # Errors
+    /// [`Error::NotARepository`] if no repository is found.
+    pub fn discover_with(path: impl AsRef<Path>, environment: Environment) -> Result<Self, Error> {
+        let git = GixRepo::discover(path.as_ref(), environment)?;
         let journal = Journal::new(git.common_dir().join("stack").join("stack.db"));
         let recovered = journal.recover(&git)?;
         Ok(Self {
@@ -173,6 +198,76 @@ impl Workspace {
         let reference = format!("{}{name}", metadata::TRUNKS);
         let outcome = self.update(&format!("trunk add {name}"), reference, None, Some(blob))?;
         Ok(marked(outcome, role, parent))
+    }
+
+    /// Rebases `branch` and every branch leafward of it (through limbs) onto their parents' current tips, and records
+    /// each one's parent. For a trunk, restacks every branch on it; the trunk itself never moves.
+    ///
+    /// All moves apply in one journalled transaction (one undo). If a commit conflicts, that branch and the branches
+    /// on it are left as they were, the rest are restacked, and [`Restacked::conflict`] says how to finish by hand.
+    ///
+    /// # Errors
+    /// - [`Error::UnknownBranch`].
+    /// - [`Error::OffshootNotInHistory`] or [`Error::MergeCommit`] for a branch restack can't handle.
+    /// - As [`Journal`]'s transaction: a dirty or elsewhere-checked-out branch that would move.
+    pub fn restack(&self, branch: &str) -> Result<Restacked, Error> {
+        let (metadata, resolution) = self.resolve()?;
+        if !resolution.branches.contains_key(branch) {
+            return Err(Error::UnknownBranch {
+                name: branch.into(),
+            });
+        }
+        let plan = crate::restack::plan(&*self.git, &resolution, branch)?;
+        let mut updates: Vec<RefUpdate> = plan
+            .moves
+            .iter()
+            .map(|moved| RefUpdate {
+                name: format!("refs/heads/{}", moved.branch),
+                old: Some(moved.old.clone()),
+                new: Some(moved.new.clone()),
+            })
+            .collect();
+        for (name, link) in &plan.links {
+            let old = metadata.links.get(name);
+            if old.is_some_and(|stored| stored.value == *link) {
+                continue;
+            }
+            updates.push(RefUpdate {
+                name: format!("{}{name}", metadata::BRANCHES),
+                old: old.map(|stored| stored.id.clone()),
+                new: Some(self.git.write_blob(&metadata::encode(link))?),
+            });
+        }
+        let outcome = if updates.is_empty() {
+            Outcome::Unchanged
+        } else {
+            let description = format!("restack {branch}");
+            self.journal.transact(
+                &*self.git,
+                OperationKind::Command,
+                &description,
+                None,
+                updates,
+            )?;
+            Outcome::Changed
+        };
+        let moved = plan
+            .moves
+            .into_iter()
+            .map(|moved| Moved {
+                name: moved.branch,
+                onto: moved.onto,
+                old: moved.old,
+                new: moved.new,
+                replayed: moved.replayed,
+                dropped: moved.dropped,
+            })
+            .collect();
+        Ok(Restacked {
+            outcome,
+            moved,
+            conflict: plan.conflict,
+        })
     }
 
     /// Unmarks a trunk. The branch itself is untouched; branches on it are resolved again.

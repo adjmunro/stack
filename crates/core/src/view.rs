@@ -152,3 +152,43 @@ pub enum RecoveryOutcome {
     /// Refs are a mix of old and new values, or neither. Left pending for a human to resolve.
     Inconsistent,
 }
+
+/// The result of [`crate::Workspace::restack`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct Restacked {
+    /// [`Outcome::Unchanged`] if every branch was already up to date and recorded.
+    pub outcome: Outcome,
+    /// Branches moved onto their parent's current tip, parents first.
+    pub moved: Vec<Moved>,
+    /// The first conflict hit. That branch and everything leafward of it were left as they were; everything else
+    /// was restacked.
+    pub conflict: Option<Conflict>,
+}
+
+/// A branch moved by a restack.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct Moved {
+    pub name: String,
+    /// The parent it was moved onto.
+    pub onto: String,
+    pub old: String,
+    pub new: String,
+    /// Commits copied onto the parent.
+    pub replayed: usize,
+    /// Commits left out because the parent already has their changes.
+    pub dropped: usize,
+}
+
+/// A commit that couldn't be replayed cleanly during a restack.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct Conflict {
+    pub branch: String,
+    pub commit: String,
+    pub summary: String,
+    /// Paths with conflicts.
+    pub paths: Vec<String>,
+    /// The parent branch it was being moved onto.
+    pub onto: String,
+    /// The commit it was based on; `git rebase --onto <onto> <offshoot> <branch>` resolves it by hand.
+    pub offshoot: String,
+}

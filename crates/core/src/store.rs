@@ -11,9 +11,10 @@ use rusqlite::{Connection, params};
 use crate::git::RefUpdate;
 use crate::{Error, OperationKind, OperationState};
 
-const SCHEMA_VERSION: i64 = 1;
+const SCHEMA_VERSION: i64 = 2;
 
-const MIGRATIONS: [&str; 1] = [r#"
+const MIGRATIONS: [&str; 2] = [
+    r#"
     CREATE TABLE operation (
         id          INTEGER PRIMARY KEY,
         kind        TEXT    NOT NULL CHECK (kind IN ('command', 'undo', 'redo')),
@@ -31,7 +32,12 @@ const MIGRATIONS: [&str; 1] = [r#"
         new       TEXT,
         PRIMARY KEY (operation, name)
     );
-"#];
+"#,
+    r#"
+    ALTER TABLE operation ADD COLUMN checkout_from TEXT;
+    ALTER TABLE operation ADD COLUMN checkout_to TEXT;
+"#,
+];
 
 /// An operation as stored.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -44,6 +50,8 @@ pub(crate) struct Record {
     pub undone: bool,
     pub started_at: i64,
     pub updates: Vec<RefUpdate>,
+    /// Commits the working tree was moved `(from, to)` before the refs, if the checked-out branch moved.
+    pub checkout: Option<(String, String)>,
 }
 
 pub(crate) struct Store {
@@ -98,12 +106,21 @@ impl Store {
         description: &str,
         target: Option<i64>,
         updates: &[RefUpdate],
+        checkout: Option<&(String, String)>,
     ) -> Result<i64, Error> {
         let transaction = self.connection.transaction().map_err(Error::store)?;
         transaction
             .execute(
-                "INSERT INTO operation (kind, description, target, state, started_at) VALUES (?1, ?2, ?3, 'pending', ?4)",
-                params![kind_name(kind), description, target, now()],
+                "INSERT INTO operation (kind, description, target, state, started_at, checkout_from, checkout_to)
+                 VALUES (?1, ?2, ?3, 'pending', ?4, ?5, ?6)",
+                params![
+                    kind_name(kind),
+                    description,
+                    target,
+                    now(),
+                    checkout.map(|(from, _)| from),
+                    checkout.map(|(_, to)| to)
+                ],
             )
             .map_err(Error::store)?;
         let id = transaction.last_insert_rowid();
@@ -173,7 +190,8 @@ impl Store {
 
     fn query(&self, clause: &str, parameters: impl rusqlite::Params) -> Result<Vec<Record>, Error> {
         let sql = format!(
-            "SELECT id, kind, description, target, state, undone, started_at FROM operation {clause}"
+            "SELECT id, kind, description, target, state, undone, started_at, checkout_from, checkout_to
+             FROM operation {clause}"
         );
         let mut statement = self.connection.prepare(&sql).map_err(Error::store)?;
         let rows = statement
@@ -187,6 +205,9 @@ impl Store {
                     undone: row.get(5)?,
                     started_at: row.get(6)?,
                     updates: Vec::new(),
+                    checkout: row
+                        .get::<_, Option<String>>(7)?
+                        .zip(row.get::<_, Option<String>>(8)?),
                 })
             })
             .map_err(Error::store)?;

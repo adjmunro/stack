@@ -1,10 +1,11 @@
 #![allow(dead_code)]
 
-use stack_core::{Node, Parent, Tree, Workspace};
+use stack_core::{Environment, Node, Parent, Tree, Workspace};
 use stack_testkit::Fixture;
 
+/// A workspace on the fixture, running `git` in the fixture's sealed environment.
 pub fn workspace(fixture: &Fixture) -> Workspace {
-    Workspace::discover(fixture.path()).unwrap()
+    Workspace::discover_with(fixture.path(), Environment::Exactly(fixture.environment())).unwrap()
 }
 
 /// A repo with one commit on `develop`, marked as a trunk.

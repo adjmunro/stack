@@ -1,12 +1,14 @@
 //! The `GitRepo` port and its adapters.
 
 use std::collections::HashMap;
+use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::process::{Command, Output, Stdio};
 
 use gix::refs::transaction::{Change, LogChange, PreviousValue, RefEdit, RefLog};
 use gix::refs::{FullName, Target};
 
-use crate::{Error, Head};
+use crate::{Environment, Error, Head};
 
 /// A local branch.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -26,6 +28,21 @@ pub(crate) struct FormerTip {
     pub id: String,
     /// The reflog message of the update that moved the branch off this commit, e.g. `commit (amend): …`.
     pub left_by: String,
+}
+
+/// The parts of a commit restack needs.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct CommitInfo {
+    pub tree: String,
+    pub parents: Vec<String>,
+    pub summary: String,
+}
+
+/// The result of [`GitRepo::merge_trees`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum Merge {
+    Clean { tree: String },
+    Conflicted { paths: Vec<String> },
 }
 
 /// A ref that points directly at a blob, with the blob's contents.
@@ -101,22 +118,100 @@ pub(crate) trait GitRepo: Send + Sync {
     fn write_blob(&self, data: &[u8]) -> Result<String, Error>;
 
     /// Applies every update or none. Fails without changes if any ref's current value isn't its `old`.
-    fn update_refs(&self, updates: &[RefUpdate]) -> Result<(), Error>;
+    /// `message` goes in the reflog of refs that have one (e.g. branches).
+    fn update_refs(&self, updates: &[RefUpdate], message: &str) -> Result<(), Error>;
+
+    /// A commit's tree, parents, and subject line.
+    fn commit(&self, id: &str) -> Result<CommitInfo, Error>;
+
+    /// Three-way merges commits `ours` and `theirs` over `base` without touching the index or working tree
+    /// (`git merge-tree`).
+    fn merge_trees(&self, base: &str, ours: &str, theirs: &str) -> Result<Merge, Error>;
+
+    /// Writes a commit with `tree` and `parent`, and `original`'s author and message (`git commit-tree`, which
+    /// signs if the user's config says to). The committer is the current user.
+    fn copy_commit(&self, original: &str, tree: &str, parent: &str) -> Result<String, Error>;
+
+    /// Whether tracked files in the working tree and index match `HEAD`. Untracked files are ignored.
+    fn is_worktree_clean(&self) -> Result<bool, Error>;
+
+    /// Whether the index matches `commit`'s tree.
+    fn index_matches(&self, commit: &str) -> Result<bool, Error>;
+
+    /// Moves the index and working tree from commit `from` to commit `to` (`git read-tree -m -u`), without touching
+    /// refs. Fails without changes if that would overwrite local changes.
+    fn checkout(&self, from: &str, to: &str) -> Result<(), Error>;
+
+    /// Branches checked out in other worktrees of this repository.
+    fn checked_out_elsewhere(&self) -> Result<Vec<String>, Error>;
 }
 
 /// [`GitRepo`] backed by `gix`.
 pub(crate) struct GixRepo {
     repo: gix::ThreadSafeRepository,
+    /// `commit.gpgSign`, read on first use.
+    signs_commits: std::sync::OnceLock<bool>,
+    environment: Environment,
 }
 
 impl GixRepo {
-    pub(crate) fn discover(path: &Path) -> Result<Self, Error> {
+    /// `git <args>` pointed explicitly at this repository, so inherited `GIT_DIR`, `GIT_INDEX_FILE`, etc. can't
+    /// redirect it. Other environment (signing agents, identity overrides) passes through.
+    fn git(&self, args: &[&str]) -> Command {
+        let repo = self.repo.to_thread_local();
+        let mut command = Command::new("git");
+        match &self.environment {
+            Environment::Inherit => {
+                for variable in [
+                    "GIT_INDEX_FILE",
+                    "GIT_OBJECT_DIRECTORY",
+                    "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+                    "GIT_COMMON_DIR",
+                    "GIT_NAMESPACE",
+                ] {
+                    command.env_remove(variable);
+                }
+            }
+            Environment::Exactly(variables) => {
+                command
+                    .env_clear()
+                    .envs(variables.iter().map(|(key, value)| (key, value)));
+            }
+        }
+        command.arg("--git-dir").arg(repo.git_dir());
+        if let Some(workdir) = repo.workdir() {
+            command.arg("--work-tree").arg(workdir).current_dir(workdir);
+        }
+        command.args(args);
+        command
+    }
+
+    fn signs_commits(&self) -> Result<bool, Error> {
+        if let Some(signs) = self.signs_commits.get() {
+            return Ok(*signs);
+        }
+        let mut command = self.git(&["config", "--type=bool", "--get", "commit.gpgsign"]);
+        let output = run(&mut command, b"")?;
+        let signs = match output.status.code() {
+            Some(0) => String::from_utf8_lossy(&output.stdout).trim() == "true",
+            // Unset.
+            Some(1) => false,
+            _ => return Err(command_error(&command, &output)),
+        };
+        Ok(*self.signs_commits.get_or_init(|| signs))
+    }
+
+    pub(crate) fn discover(path: &Path, environment: Environment) -> Result<Self, Error> {
         let repo =
             gix::ThreadSafeRepository::discover(path).map_err(|source| Error::NotARepository {
                 path: path.to_owned(),
                 source: source.into(),
             })?;
-        Ok(Self { repo })
+        Ok(Self {
+            repo,
+            signs_commits: std::sync::OnceLock::new(),
+            environment,
+        })
     }
 }
 
@@ -278,14 +373,12 @@ impl GitRepo for GixRepo {
         if commits.is_empty() {
             return Ok(HashMap::new());
         }
-        let git_dir = self.repo.to_thread_local().git_dir().to_owned();
         let revisions = commits
             .iter()
             .map(|commit| format!("{commit}\n"))
             .collect::<String>();
-        let log = run_git(
-            &git_dir,
-            &[
+        let log = run_ok(
+            &mut self.git(&[
                 "log",
                 "--stdin",
                 "--no-walk=unsorted",
@@ -294,10 +387,10 @@ impl GitRepo for GixRepo {
                 "--no-ext-diff",
                 "--no-textconv",
                 "--format=commit %H",
-            ],
+            ]),
             revisions.as_bytes(),
         )?;
-        let ids = run_git(&git_dir, &["patch-id", "--stable"], &log)?;
+        let ids = run_ok(&mut self.git(&["patch-id", "--stable"]), &log)?;
         Ok(String::from_utf8_lossy(&ids)
             .lines()
             .filter_map(|line| line.split_once(' '))
@@ -347,7 +440,125 @@ impl GitRepo for GixRepo {
         Ok(repo.write_blob(data).map_err(Error::git)?.to_string())
     }
 
-    fn update_refs(&self, updates: &[RefUpdate]) -> Result<(), Error> {
+    fn commit(&self, id: &str) -> Result<CommitInfo, Error> {
+        let repo = self.repo.to_thread_local();
+        let commit = repo.find_commit(object_id(id)?).map_err(Error::git)?;
+        let decoded = commit.decode().map_err(Error::git)?;
+        Ok(CommitInfo {
+            tree: decoded.tree().to_string(),
+            parents: decoded.parents().map(|parent| parent.to_string()).collect(),
+            summary: decoded.message_summary().to_string(),
+        })
+    }
+
+    fn merge_trees(&self, base: &str, ours: &str, theirs: &str) -> Result<Merge, Error> {
+        let base = format!("--merge-base={base}");
+        let mut command = self.git(&[
+            "merge-tree",
+            "--write-tree",
+            "--name-only",
+            "--no-messages",
+            &base,
+            ours,
+            theirs,
+        ]);
+        let output = run(&mut command, b"")?;
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let mut lines = stdout.lines();
+        match output.status.code() {
+            Some(0) => {
+                let tree = lines
+                    .next()
+                    .ok_or_else(|| command_error(&command, &output))?;
+                Ok(Merge::Clean {
+                    tree: tree.to_owned(),
+                })
+            }
+            Some(1) => Ok(Merge::Conflicted {
+                paths: lines
+                    .skip(1)
+                    .filter(|line| !line.is_empty())
+                    .map(str::to_owned)
+                    .collect(),
+            }),
+            _ => Err(command_error(&command, &output)),
+        }
+    }
+
+    fn copy_commit(&self, original: &str, tree: &str, parent: &str) -> Result<String, Error> {
+        let repo = self.repo.to_thread_local();
+        let commit = repo.find_commit(object_id(original)?).map_err(Error::git)?;
+        let decoded = commit.decode().map_err(Error::git)?;
+        let author = decoded.author().map_err(Error::git)?;
+        let mut command = self.git(&["commit-tree", tree, "-p", parent]);
+        // commit-tree is plumbing: it ignores commit.gpgSign, so honour it here as porcelain commands do.
+        if self.signs_commits()? {
+            command.arg("-S");
+        }
+        command
+            .env("GIT_AUTHOR_NAME", author.name.to_string())
+            .env("GIT_AUTHOR_EMAIL", author.email.to_string())
+            .env("GIT_AUTHOR_DATE", author.time);
+        let stdout = run_ok(&mut command, decoded.message)?;
+        Ok(String::from_utf8_lossy(&stdout).trim().to_owned())
+    }
+
+    fn is_worktree_clean(&self) -> Result<bool, Error> {
+        if self.repo.to_thread_local().workdir().is_none() {
+            return Ok(true);
+        }
+        let mut command = self.git(&[
+            "--no-optional-locks",
+            "status",
+            "--porcelain",
+            "--untracked-files=no",
+        ]);
+        Ok(run_ok(&mut command, b"")?.is_empty())
+    }
+
+    fn index_matches(&self, commit: &str) -> Result<bool, Error> {
+        let mut command = self.git(&["diff-index", "--cached", "--quiet", commit, "--"]);
+        let output = run(&mut command, b"")?;
+        match output.status.code() {
+            Some(0) => Ok(true),
+            Some(1) => Ok(false),
+            _ => Err(command_error(&command, &output)),
+        }
+    }
+
+    fn checkout(&self, from: &str, to: &str) -> Result<(), Error> {
+        run_ok(&mut self.git(&["read-tree", "-m", "-u", from, to]), b"").map(|_| ())
+    }
+
+    fn checked_out_elsewhere(&self) -> Result<Vec<String>, Error> {
+        let repo = self.repo.to_thread_local();
+        let Some(here) = repo.workdir().map(|workdir| workdir.canonicalize()) else {
+            return Ok(Vec::new());
+        };
+        let here = here.map_err(Error::git)?;
+        let listing = run_ok(&mut self.git(&["worktree", "list", "--porcelain"]), b"")?;
+        let listing = String::from_utf8_lossy(&listing);
+        let mut branches = Vec::new();
+        for block in listing.split("\n\n") {
+            let mut path = None;
+            let mut branch = None;
+            for line in block.lines() {
+                if let Some(value) = line.strip_prefix("worktree ") {
+                    path = Some(PathBuf::from(value));
+                } else if let Some(value) = line.strip_prefix("branch refs/heads/") {
+                    branch = Some(value.to_owned());
+                }
+            }
+            let elsewhere =
+                path.is_some_and(|path| path.canonicalize().map_or(true, |path| path != here));
+            if let (true, Some(branch)) = (elsewhere, branch) {
+                branches.push(branch);
+            }
+        }
+        Ok(branches)
+    }
+
+    fn update_refs(&self, updates: &[RefUpdate], message: &str) -> Result<(), Error> {
         let repo = self.repo.to_thread_local();
         let edits = updates
             .iter()
@@ -358,7 +569,10 @@ impl GitRepo for GixRepo {
                 };
                 let change = match &update.new {
                     Some(new) => Change::Update {
-                        log: LogChange::default(),
+                        log: LogChange {
+                            message: message.into(),
+                            ..LogChange::default()
+                        },
                         expected,
                         new: Target::Object(object_id(new)?),
                     },
@@ -406,15 +620,9 @@ fn former_tips(entries: &[(String, String, i64)], tip: &str) -> Vec<FormerTip> {
     former
 }
 
-/// Runs `git --git-dir=<git_dir> <args>` with `stdin`, returning stdout.
-fn run_git(git_dir: &Path, args: &[&str], stdin: &[u8]) -> Result<Vec<u8>, Error> {
-    use std::io::Write;
-    use std::process::{Command, Stdio};
-
-    let mut child = Command::new("git")
-        .arg("--git-dir")
-        .arg(git_dir)
-        .args(args)
+/// Runs `command` with `stdin`, returning its output whatever the exit status.
+fn run(command: &mut Command, stdin: &[u8]) -> Result<Output, Error> {
+    let mut child = command
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -425,20 +633,31 @@ fn run_git(git_dir: &Path, args: &[&str], stdin: &[u8]) -> Result<Vec<u8>, Error
     // Written from another thread so a large stdout can't deadlock against a full stdin pipe.
     let writer = std::thread::spawn(move || input.write_all(&stdin));
     let output = child.wait_with_output().map_err(Error::git)?;
-    writer
-        .join()
-        .expect("stdin writer doesn't panic")
-        .map_err(Error::git)?;
+    let written = writer.join().expect("stdin writer doesn't panic");
+    // A command may exit without reading all of stdin; only report that if it also failed.
+    if !output.status.success() {
+        written.map_err(Error::git)?;
+    }
+    Ok(output)
+}
+
+/// As [`run`], failing on a non-zero exit status. Returns stdout.
+fn run_ok(command: &mut Command, stdin: &[u8]) -> Result<Vec<u8>, Error> {
+    let output = run(command, stdin)?;
     if output.status.success() {
         Ok(output.stdout)
     } else {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        Err(Error::git(format!(
-            "git {}: {}",
-            args.join(" "),
-            stderr.trim()
-        )))
+        Err(command_error(command, &output))
     }
+}
+
+fn command_error(command: &Command, output: &Output) -> Error {
+    let args: Vec<_> = command
+        .get_args()
+        .map(|arg| arg.to_string_lossy())
+        .collect();
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    Error::git(format!("git {}: {}", args.join(" "), stderr.trim()))
 }
 
 /// Creates an empty repository at `path` with `git init`, honouring the user's git config (e.g.
@@ -474,7 +693,7 @@ mod tests {
     use super::*;
 
     fn repo(fixture: &Fixture) -> GixRepo {
-        GixRepo::discover(&fixture.path()).unwrap()
+        GixRepo::discover(&fixture.path(), Environment::Exactly(fixture.environment())).unwrap()
     }
 
     #[test]
@@ -506,11 +725,14 @@ mod tests {
         let repo = repo(&fixture);
         let blob = repo.write_blob(b"x").unwrap();
         let other = repo.write_blob(b"y").unwrap();
-        repo.update_refs(&[RefUpdate {
-            name: "refs/stack/test".into(),
-            old: None,
-            new: Some(blob.clone()),
-        }])
+        repo.update_refs(
+            &[RefUpdate {
+                name: "refs/stack/test".into(),
+                old: None,
+                new: Some(blob.clone()),
+            }],
+            "",
+        )
         .unwrap();
         let before = fixture.snapshot();
 
@@ -519,7 +741,7 @@ mod tests {
             old: Some(other),
             new: None,
         };
-        assert!(repo.update_refs(&[stale]).is_err());
+        assert!(repo.update_refs(&[stale], "").is_err());
         fixture.assert_unchanged(&before);
     }
 
@@ -533,7 +755,7 @@ mod tests {
             old: None,
             new: None,
         };
-        assert!(repo(&fixture).update_refs(&[empty]).is_err());
+        assert!(repo(&fixture).update_refs(&[empty], "").is_err());
         fixture.assert_unchanged(&before);
     }
 
@@ -554,7 +776,7 @@ mod tests {
             old: Some(blob.clone()),
             new: Some(blob),
         };
-        assert!(repo.update_refs(&[good, bad]).is_err());
+        assert!(repo.update_refs(&[good, bad], "").is_err());
         fixture.assert_unchanged(&before);
     }
 }

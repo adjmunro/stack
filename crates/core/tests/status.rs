@@ -1,8 +1,8 @@
-use stack_core::{Error, Head, Workspace};
+use stack_core::{Environment, Error, Head, Workspace};
 use stack_testkit::Fixture;
 
 fn head(fixture: &Fixture) -> Head {
-    Workspace::discover(fixture.path())
+    Workspace::discover_with(fixture.path(), Environment::Exactly(fixture.environment()))
         .unwrap()
         .status()
         .unwrap()
@@ -71,10 +71,13 @@ fn discovers_from_subdirectory() {
     let fixture = Fixture::new();
     fixture.commit("dir/a.txt", "a", "feat: a");
 
-    let status = Workspace::discover(fixture.path().join("dir"))
-        .unwrap()
-        .status()
-        .unwrap();
+    let status = Workspace::discover_with(
+        fixture.path().join("dir"),
+        Environment::Exactly(fixture.environment()),
+    )
+    .unwrap()
+    .status()
+    .unwrap();
     assert!(matches!(status.head, Head::Branch { ref name, .. } if name == "develop"));
 }
 

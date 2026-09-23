@@ -50,8 +50,13 @@ impl Journal {
 
     /// Applies `updates` atomically as a journalled operation. Returns its id.
     ///
+    /// If the checked-out branch moves, the index and working tree move first (see [`GitRepo::checkout`]), and back
+    /// again if the refs then fail to update.
+    ///
     /// # Errors
-    /// Whatever the ref transaction returns; the operation is then marked done or failed to match the refs.
+    /// - [`Error::DirtyWorktree`] or [`Error::DeletesCheckedOutBranch`] if the checked-out branch is involved.
+    /// - [`Error::CheckedOutElsewhere`] if a branch it moves is checked out in another worktree.
+    /// - Whatever the checkout or ref transaction returns; the operation is then marked done or failed to match.
     pub(crate) fn transact(
         &self,
         git: &dyn GitRepo,
@@ -60,11 +65,18 @@ impl Journal {
         target: Option<i64>,
         mut updates: Vec<RefUpdate>,
     ) -> Result<i64, Error> {
+        let checkout = plan_checkout(git, &updates)?;
         updates.extend(keep_update(git, &updates)?);
         let mut guard = self.store(true)?.expect("store created");
         let store = guard.as_mut().expect("store opened");
-        let id = store.begin(kind, description, target, &updates)?;
-        match git.update_refs(&updates) {
+        let id = store.begin(kind, description, target, &updates, checkout.as_ref())?;
+        if let Some((from, to)) = &checkout {
+            if let Err(error) = git.checkout(from, to) {
+                store.finish(id, OperationState::Failed)?;
+                return Err(error);
+            }
+        }
+        match git.update_refs(&updates, &format!("stack: {description}")) {
             Ok(()) => {
                 store.finish(id, OperationState::Done)?;
                 Ok(id)
@@ -79,6 +91,7 @@ impl Journal {
                     undone: false,
                     started_at: 0,
                     updates,
+                    checkout,
                 };
                 resolve_pending(store, git, &record)?;
                 Err(error)
@@ -170,6 +183,46 @@ impl Journal {
     }
 }
 
+/// The working-tree move `(from, to)` needed because `updates` move the checked-out branch, if they do.
+fn plan_checkout(
+    git: &dyn GitRepo,
+    updates: &[RefUpdate],
+) -> Result<Option<(String, String)>, Error> {
+    let elsewhere = git.checked_out_elsewhere()?;
+    if let Some(update) = updates.iter().find(|update| {
+        update
+            .name
+            .strip_prefix("refs/heads/")
+            .is_some_and(|branch| elsewhere.iter().any(|other| other == branch))
+    }) {
+        let branch = update.name.trim_start_matches("refs/heads/").to_owned();
+        return Err(Error::CheckedOutElsewhere { branch });
+    }
+    let crate::Head::Branch {
+        name,
+        commit: Some(commit),
+    } = git.head()?
+    else {
+        return Ok(None);
+    };
+    let Some(update) = updates
+        .iter()
+        .find(|update| update.name == format!("refs/heads/{name}"))
+    else {
+        return Ok(None);
+    };
+    let Some(new) = &update.new else {
+        return Err(Error::DeletesCheckedOutBranch { branch: name });
+    };
+    if update.old.as_deref() != Some(commit.as_str()) || *new == commit {
+        return Ok(None);
+    }
+    if !git.is_worktree_clean()? {
+        return Err(Error::DirtyWorktree { branch: name });
+    }
+    Ok(Some((commit, new.clone())))
+}
+
 /// An update to [`KEEP`] adding every object `updates` stop referencing from `refs/stack/`, if any are new to it.
 fn keep_update(git: &dyn GitRepo, updates: &[RefUpdate]) -> Result<Option<RefUpdate>, Error> {
     let current = git.ref_value(KEEP)?;
@@ -220,6 +273,12 @@ fn resolve_pending(
         store.finish(record.id, OperationState::Done)?;
         RecoveryOutcome::Completed
     } else if all_old {
+        // The working tree may already have moved ahead of the refs; move it back.
+        if let Some((from, to)) = &record.checkout {
+            if git.index_matches(to)? && git.checkout(to, from).is_err() {
+                return Ok(RecoveryOutcome::Inconsistent);
+            }
+        }
         store.finish(record.id, OperationState::Failed)?;
         RecoveryOutcome::RolledBack
     } else {
@@ -307,16 +366,46 @@ mod tests {
         fn write_blob(&self, data: &[u8]) -> Result<String, Error> {
             self.inner.write_blob(data)
         }
-        fn update_refs(&self, updates: &[RefUpdate]) -> Result<(), Error> {
+        fn commit(&self, id: &str) -> Result<crate::git::CommitInfo, Error> {
+            self.inner.commit(id)
+        }
+        fn merge_trees(
+            &self,
+            base: &str,
+            ours: &str,
+            theirs: &str,
+        ) -> Result<crate::git::Merge, Error> {
+            self.inner.merge_trees(base, ours, theirs)
+        }
+        fn copy_commit(&self, original: &str, tree: &str, parent: &str) -> Result<String, Error> {
+            self.inner.copy_commit(original, tree, parent)
+        }
+        fn is_worktree_clean(&self) -> Result<bool, Error> {
+            self.inner.is_worktree_clean()
+        }
+        fn index_matches(&self, commit: &str) -> Result<bool, Error> {
+            self.inner.index_matches(commit)
+        }
+        fn checkout(&self, from: &str, to: &str) -> Result<(), Error> {
+            self.inner.checkout(from, to)
+        }
+        fn checked_out_elsewhere(&self) -> Result<Vec<String>, Error> {
+            self.inner.checked_out_elsewhere()
+        }
+        fn update_refs(&self, updates: &[RefUpdate], message: &str) -> Result<(), Error> {
             if self.apply_refs {
-                self.inner.update_refs(updates)?;
+                self.inner.update_refs(updates, message)?;
             }
             panic!("simulated crash");
         }
     }
 
     fn gix(fixture: &Fixture) -> GixRepo {
-        GixRepo::discover(&fixture.path()).unwrap()
+        GixRepo::discover(
+            &fixture.path(),
+            crate::Environment::Exactly(fixture.environment()),
+        )
+        .unwrap()
     }
 
     fn journal_path(fixture: &Fixture) -> PathBuf {
@@ -459,6 +548,51 @@ mod tests {
             .recover(&gix(&fixture))
             .unwrap();
         assert_eq!(again, recovered);
+    }
+
+    #[test]
+    fn crash_after_moving_the_working_tree_moves_it_back() {
+        let fixture = Fixture::new();
+        let old = fixture.commit("base.txt", "base", "feat: base");
+        fixture.git(&["switch", "--quiet", "--create", "other"]);
+        let new = fixture.commit("other.txt", "other", "feat: other");
+        fixture.git(&["switch", "--quiet", "develop"]);
+        let before = fixture.snapshot();
+        let crashing = Crashing {
+            inner: gix(&fixture),
+            apply_refs: false,
+        };
+        let journal = Journal::new(journal_path(&fixture));
+        let update = RefUpdate {
+            name: "refs/heads/develop".into(),
+            old: Some(old),
+            new: Some(new),
+        };
+        let crashed = catch_unwind(AssertUnwindSafe(|| {
+            journal.transact(
+                &crashing,
+                OperationKind::Command,
+                "move develop",
+                None,
+                vec![update],
+            )
+        }));
+        assert!(crashed.is_err());
+        assert!(
+            fixture.path().join("other.txt").exists(),
+            "working tree moved before the crash"
+        );
+
+        let recovered = Journal::new(journal_path(&fixture))
+            .recover(&gix(&fixture))
+            .unwrap();
+
+        assert_eq!(recovered[0].outcome, RecoveryOutcome::RolledBack);
+        let diff = before.diff(&fixture.snapshot());
+        assert!(
+            diff.refs.is_empty() && diff.index.is_empty() && diff.worktree.is_empty(),
+            "{diff}"
+        );
     }
 
     #[test]

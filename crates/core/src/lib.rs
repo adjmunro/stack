@@ -8,13 +8,14 @@ mod git;
 mod journal;
 mod metadata;
 mod resolve;
+mod restack;
 mod store;
 mod view;
 mod workspace;
 
 pub use error::Error;
 pub use view::{
-    Head, Node, Operation, OperationKind, OperationState, Outcome, Parent, Recovered,
-    RecoveryOutcome, RefChange, Role, Source, Status, Tree,
+    Conflict, Head, Moved, Node, Operation, OperationKind, OperationState, Outcome, Parent,
+    Recovered, RecoveryOutcome, RefChange, Restacked, Role, Source, Status, Tree,
 };
-pub use workspace::{Marked, Pinned, Workspace};
+pub use workspace::{Environment, Marked, Pinned, Workspace};
