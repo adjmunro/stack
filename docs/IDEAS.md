@@ -29,4 +29,8 @@ You should remove bullets point when they are or become complete and fully imple
 - When resolving conflicts, click & drag to include a selected hunk instead of / as well as whole hunk and individual line options
 - Import filtering for diffs (Or some kind of “in `*.kt` ignore lines that start with `import *`)
 - Indexer / find usages, implementation, declaration, injection etc
-
+- I _badly_ need better worktree implementations. Or perhaps the GUI can provide a better facade? I need to be able to more freely switch between worktrees and branches owned by worktrees. The no-mulitple-workspace-checkouts thing drives me nutts. Maybe i need a bare repo and make everything a worktree or something.
+- Defer local commit signing until push.
+- Perfect undo & redo operations with extensive history.
+- Find lost HEADs
+- Multiple/different custom staging areas?
