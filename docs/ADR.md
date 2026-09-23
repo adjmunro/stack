@@ -76,11 +76,23 @@
 - Detail: Push defaults to the current branch's line: parents rootward up to the nearest trunk or limb, plus descendants leafward up to the next limbs. Trunks, limbs, and siblings are excluded. `--rootward` and `--leafward` narrow it to one direction.
 - Reason: A limb may belong to someone else, so ranges never push it. Restack must pass through limbs because their commits sit on the branch being moved.
 
-2026-09-23T12:09Z@687b03d3
+~2026-09-23T12:09Z@687b03d3~
 - Category: branch roles and scopes
+- Status: SUPERSEDED BY [2026-09-23T12:17Z@34a9d190]
 - Detail: `stack trunk add` marks both trunks and limbs; the role is inferred. A marked branch whose parent is a trunk (or that has none) is a trunk; one whose parent is a regular branch is a limb.
 - Detail: Trunks are never rebased or pushed by `stack`. Limbs are restacked with their parent.
 - Detail: Restack runs leafward from a branch, through limbs.
 - Detail: Push defaults to the current branch's line: the branch, its parents rootward up to the nearest trunk or limb (excluded), and all descendants leafward (limbs included). Siblings of the branch and its parents are excluded. `--rootward` and `--leafward` narrow it to one direction.
 - Reason: A rootward limb may be someone else's branch; a leafward one is almost certainly yours.
+- Reason: A release branch cut from a trunk looks the same as a checkpoint on a trunk. Treating both as trunks means the failure mode is "not auto-restacked", never "release branch rebased onto develop".
+
+2026-09-23T12:17Z@34a9d190
+- Category: branch roles and scopes
+- Detail: `stack trunk add` marks both trunks and limbs; the role is inferred. A marked branch whose parent is a trunk (or that has none) is a trunk; one whose parent is a regular branch is a limb.
+- Detail: Trunks are never rebased or pushed by `stack`. Limbs are restacked with their parent.
+- Detail: Restack runs leafward from a branch through every descendant, limbs included, except archived, backup, and ignored branches.
+- Detail: Push and PR commands default to the current branch's line: the branch, its parents rootward up to the nearest trunk or limb (excluded), and its descendants leafward up to and including the next limbs. Siblings of the branch and its parents are excluded.
+- Detail: `--to-leaves` extends the leafward part past limbs to the leaves. `--rootward` and `--leafward` narrow the line to one direction.
+- Detail: Pushing branches and opening PRs are separate commands, so a wide push (e.g. a backup) never opens a wave of PRs.
+- Reason: A rootward limb may be someone else's; a leafward limb is yours but starts a separate batch of review work.
 - Reason: A release branch cut from a trunk looks the same as a checkpoint on a trunk. Treating both as trunks means the failure mode is "not auto-restacked", never "release branch rebased onto develop".

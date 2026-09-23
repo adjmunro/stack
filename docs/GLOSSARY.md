@@ -7,7 +7,7 @@ Canonical vocabulary for the project. Prefer these names in code, schema, and do
 - **Trunk**: a long-lived branch with no parent, never rebased or pushed by `stack` (e.g. `develop`, `release/1.x`). A repo may have several in parallel; no ancestry is assumed between them.
 - **Limb**: a trunk-marked branch whose parent is a regular branch, making it a base for branches leafward of it (e.g. a release checkpoint, or a teammate's branch you build on). Restacked with its parent. Internal term: users mark limbs with `stack trunk add`, and the role is inferred.
 - **Stack**: the branches leafward of one trunk or limb, up to the next limbs or leaves.
-- **Line**: a branch, its parents rootward up to the nearest trunk or limb (excluded), and all its descendants leafward (limbs included). Siblings of the branch and of its parents are excluded. The default scope for push.
+- **Line**: a branch, its parents rootward up to the nearest trunk or limb (excluded), and its descendants leafward up to and including the next limbs. Siblings of the branch and of its parents are excluded. The default scope for push and PRs.
 - **Parent / child**: the branch a branch is based on, and the branches based on it.
 - **Offshoot**: the commit where a branch splits from its parent.
 - **Auto-tracking**: recording a branch's parent, derived from the commit graph, when none is recorded. A recorded parent holds while the branch still contains some version of it (current tip, a former tip, or matching patch-ids); otherwise it is re-derived and the change reported.
