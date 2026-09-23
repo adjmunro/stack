@@ -22,7 +22,7 @@
 ## Long Horizon Tasks
 
 2026-09-23T12:31Z@89920ef0:
-- Blockers: SQLite
+- Blockers: NO BLOCKERS
 - Where: crates/core/src/resolve.rs (Resolver::derive), crates/core/src/git.rs (Branch)
 - What: Record observed branch tips in SQLite on every read, as extra former tips (same gates) for branches whose reflog is missing or expired. Also first-observed time as the age fallback.
 
@@ -34,15 +34,10 @@
 
 2026-09-23T10:37Z@507992a:
 - Blockers: NO BLOCKERS
-- Where: crates/core
-- What: SQLite at `--git-common-dir`/stack; journal (intent → ref transaction → complete) with start-up recovery; op log + undo/redo.
-- What: Fault-injection tests: abort between each journal step, assert recovery leaves the repo in a before or after snapshot, never between.
-
-2026-09-23T10:37Z@507992a:
-- Blockers: NO BLOCKERS
 - Where: crates/core (GitRepo port)
 - What: In-memory restack via `gix` tree merge. Differential tests against `git rebase` results; property tests (`proptest`) over random stacks.
 - What: Commit signing for in-memory commits, or defer signing until push (see IDEAS.md).
+- What: Undo of branch moves: gc protection for deleted branches' commits; update the working tree when the checked-out branch moves (refuse if dirty).
 
 2026-09-23T10:37Z@507992a:
 - Blockers: NO BLOCKERS
@@ -53,7 +48,6 @@
 - Blockers: NO BLOCKERS
 - Where: crates/core/src/git.rs (GixRepo::discover), crates/core/tests
 - What: In-process core tests open repos with gix defaults, so they read the developer's global git config. Isolate them (e.g. gix open options driven by an environment the testkit controls) without adding a test-only public API.
-- What: Extend `Snapshot` to cover `.git/stack/` once SQLite lands.
 
 
 ---

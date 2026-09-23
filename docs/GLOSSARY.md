@@ -26,4 +26,4 @@ Canonical vocabulary for the project. Prefer these names in code, schema, and do
 - **Former tip**: a commit a branch pointed at before (from its reflog). Counts as a version of the branch only if confirmed.
 - **Review mark**: a flag (e.g. reviewed, flagged) on a commit, keyed by `patch-id` so it survives rebases that don't change the commit's diff.
 - **Fixture**: a throwaway git repo built by tests.
-- **Snapshot**: a full capture of a repo's refs, reachable objects, index, and working tree, diffed to prove what an operation changed.
+- **Snapshot**: a full capture of a repo's HEAD, refs, config, index, working tree, objects, and `.git/stack/`, diffed to prove what an operation changed.
