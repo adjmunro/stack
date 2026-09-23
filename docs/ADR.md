@@ -32,6 +32,7 @@
 
 2026-09-23T10:37Z@7b510daf
 - Category: git backend
+- Status: SUPERSEDED BY [2026-09-23T20:13Z@c8897497] for restack's tree merges and commit creation only
 - Detail: `gix` for reads and object creation (including in-memory tree merges for restack). `git` CLI for working-tree/index changes, fetch/push, hooks, and signing.
 - Detail: All git access goes through the `GitRepo` port so each operation can switch backend.
 - Reason: `gix` is pure Rust, fast, and in-process. Object writes are content-addressed and safe from a library; index, working tree, credentials, and hooks need exact `git` parity.
@@ -106,3 +107,16 @@
 - Detail: Metadata blobs a mutation stops referencing are added to a tree at `refs/stack/keep` in the same ref transaction, so undo works after `gc`. Trees, like blobs, stay out of `git log --all`.
 - Detail: Commits (for restack) will rely on branch reflogs for gc protection, since git logs every branch update; deleted branches need another mechanism.
 - Reason: Bundled SQLite gives one known version everywhere at the cost of a C toolchain at build time.
+
+2026-09-23T20:13Z@c8897497
+- Category: restack
+- Detail: Each commit is replayed with `git merge-tree --write-tree --merge-base` and written with `git commit-tree` (author and message copied; `-S` added when `commit.gpgSign` is set, since commit-tree ignores it). Nothing touches the index or working tree until the plan is complete.
+- Detail: All branch moves and parent records apply in one journalled ref transaction. A conflict leaves that branch and its descendants untouched and restacks the rest; the user finishes with `git rebase --onto <parent> <offshoot> <branch>` then `stack restack <branch>`.
+- Detail: If the checked-out branch moves, the journal moves the index and working tree first (`git read-tree -m -u`), refusing if tracked files are dirty; recovery moves it back if the refs never changed. Branches checked out in other worktrees are refused.
+- Detail: Commits already in the parent (the replayed tree equals the parent's) are dropped. Merge commits are refused for now.
+- Reason: git's own merge (ort) and commit machinery give results identical to `git rebase` (a differential test checks trees and messages) and honour the user's signing and merge config. One process per step is fast enough for stacks; the `GitRepo` port allows an in-process merge later.
+
+2026-09-23T20:13Z@c8897497
+- Category: environment
+- Detail: `Workspace::discover_with(path, Environment::Exactly(vars))` runs every `git` subprocess with exactly `vars`. The default inherits the process environment minus variables that redirect git (`GIT_INDEX_FILE`, etc.).
+- Reason: Tests must not inherit the developer's git config (it signed fixture commits with the developer's key). GUIs need it too: macOS GUI apps don't inherit the login shell's `PATH` or `SSH_AUTH_SOCK`.

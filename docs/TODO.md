@@ -32,12 +32,15 @@
 - What: Performance: one walk per branch plus pairwise `merge_base`; unrelated histories (e.g. `gh-pages`) walk everything. Consider one shared walk and the commit-graph. Add a benchmark fixture first.
 - What: Prune `refs/stack/branches/*` records for deleted branches during mutations.
 
-2026-09-23T10:37Z@507992a:
+2026-09-23T20:13Z@c8897497:
 - Blockers: NO BLOCKERS
-- Where: crates/core (GitRepo port)
-- What: In-memory restack via `gix` tree merge. Differential tests against `git rebase` results; property tests (`proptest`) over random stacks.
-- What: Commit signing for in-memory commits, or defer signing until push (see IDEAS.md).
-- What: Undo of branch moves: gc protection for deleted branches' commits; update the working tree when the checked-out branch moves (refuse if dirty).
+- Where: crates/core/src/restack.rs, crates/core/src/journal.rs
+- What: Resolve conflicts inside `stack` (stop, let the user resolve, `stack continue`) instead of handing off to `git rebase`.
+- What: Replay merge commits.
+- What: Deferred signing until push (see IDEAS.md), as an option.
+- What: gc protection for commits of branches `stack` deletes (moved branches are covered by their reflogs).
+- What: HEAD's reflog isn't updated when the checked-out branch moves.
+- What: Property tests (`proptest`) over random stacks: restack then undo restores the snapshot; restack matches `git rebase`.
 
 2026-09-23T10:37Z@507992a:
 - Blockers: NO BLOCKERS
@@ -47,7 +50,7 @@
 2026-09-23T11:05Z@82e6359b:
 - Blockers: NO BLOCKERS
 - Where: crates/core/src/git.rs (GixRepo::discover), crates/core/tests
-- What: In-process core tests open repos with gix defaults, so they read the developer's global git config. Isolate them (e.g. gix open options driven by an environment the testkit controls) without adding a test-only public API.
+- What: `git` subprocesses in tests are sealed via `Environment::Exactly`, but gix itself still reads the developer's global config in-process (e.g. reflog identity). Feed the environment to gix too (open options / config overrides).
 
 
 ---
