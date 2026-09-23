@@ -7,6 +7,9 @@ Canonical vocabulary for the project. Prefer these names in code, schema, and do
 - **Trunk**: a long-lived base branch that stacks target (e.g. `develop`). A repo may have several.
 - **Stack**: a chain of branches, each based on its parent, rooted on a trunk.
 - **Parent / child**: the branch a branch is based on, and the branches based on it.
+- **Rootward**: towards the trunk, through parents (Graphite: "downstack").
+- **Leafward**: away from the trunk, through children (Graphite: "upstack").
+- **Leaf**: a branch with no children.
 - **Restack**: rebase a branch (and its descendants) onto its parent's current tip.
 - **Workspace**: the core facade over one git repo plus `stack` state. Entry point for every surface.
 - **Surface**: a consumer of the core (CLI, GUI, MCP).
