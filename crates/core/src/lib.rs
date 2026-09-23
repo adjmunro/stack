@@ -5,9 +5,10 @@
 
 mod error;
 mod git;
+mod metadata;
 mod view;
 mod workspace;
 
 pub use error::Error;
-pub use view::{Head, Status};
+pub use view::{Head, Node, Outcome, Status, Tree};
 pub use workspace::Workspace;
