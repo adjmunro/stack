@@ -5,7 +5,8 @@ use std::path::Path;
 
 use crate::Fixture;
 
-/// Everything about a repo an operation could change: HEAD, refs, config, index, working tree, and object database.
+/// Everything about a repo an operation could change: HEAD, refs, config, index, working tree, object database, and
+/// `stack`'s own files in `.git/stack/`.
 ///
 /// Captured with read-only `git` plumbing, independent of the `gix` code under test.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -16,6 +17,7 @@ pub struct Snapshot {
     index: BTreeMap<String, String>,
     worktree: BTreeMap<String, Vec<u8>>,
     objects: BTreeSet<String>,
+    stack: BTreeMap<String, Vec<u8>>,
 }
 
 impl Snapshot {
@@ -54,6 +56,11 @@ impl Snapshot {
         let config = fs::read_to_string(git_dir.join("config")).expect("read .git/config");
         let mut worktree = BTreeMap::new();
         walk(&fixture.path(), &fixture.path(), &mut worktree);
+        let stack_dir = git_dir.join("stack");
+        let mut stack = BTreeMap::new();
+        if stack_dir.is_dir() {
+            walk(&stack_dir, &stack_dir, &mut stack);
+        }
         Self {
             head,
             refs,
@@ -61,6 +68,7 @@ impl Snapshot {
             index,
             worktree,
             objects,
+            stack,
         }
     }
 
@@ -76,6 +84,7 @@ impl Snapshot {
                 .collect(),
             objects_added: after.objects.difference(&self.objects).cloned().collect(),
             objects_removed: self.objects.difference(&after.objects).cloned().collect(),
+            stack: diff_maps(&self.stack, &after.stack).into_keys().collect(),
         }
     }
 }
@@ -90,6 +99,8 @@ pub struct SnapshotDiff {
     pub worktree: BTreeSet<String>,
     pub objects_added: BTreeSet<String>,
     pub objects_removed: BTreeSet<String>,
+    /// Files under `.git/stack/` that were added, removed, or changed.
+    pub stack: BTreeSet<String>,
 }
 
 impl SnapshotDiff {
@@ -115,6 +126,9 @@ impl fmt::Display for SnapshotDiff {
         }
         for path in &self.worktree {
             writeln!(f, "worktree: {path}")?;
+        }
+        for path in &self.stack {
+            writeln!(f, "stack: {path}")?;
         }
         writeln!(
             f,
