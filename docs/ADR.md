@@ -50,3 +50,10 @@
 - Detail: Tests run against real fixture repos in temp dirs, built with the real `git` CLI in an isolated environment (no global/system config, fixed identities and dates).
 - Detail: Mutation tests diff a full repo snapshot before and after, asserting the change is exactly the expected one.
 - Reason: Mishandling a real repo is catastrophic. Tests must prove an operation does no more and no less than intended.
+
+2026-09-23T11:05Z@82e6359b
+- Category: state storage
+- Detail: One ref per item, pointing directly at a JSON blob: `refs/stack/trunks/<name>` → `{"version":1}`; `refs/stack/branches/<name>` → `{"version":1,"parent":"<branch>","base":"<commit>"}`.
+- Detail: `base` is the merge base of the branch and its parent when tracked. Restack will use it to find the branch's own commits.
+- Detail: Unknown `version`s are rejected as corrupt, never rewritten.
+- Reason: Blob refs don't appear in `git log --all`, survive `gc`, and pass `fsck` (verified by tests). One ref per item keeps compare-and-swap updates independent and allows per-branch sync later.
