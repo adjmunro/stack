@@ -42,6 +42,10 @@ pub(crate) trait GitRepo: Send + Sync {
     /// The commit at `refs/heads/<name>`, or `None` if there is no such branch.
     fn branch_tip(&self, name: &str) -> Result<Option<String>, Error>;
 
+    /// The local branch matching the default branch of remote `remote` (its `refs/remotes/<remote>/HEAD`), if both
+    /// exist.
+    fn remote_default_branch(&self, remote: &str) -> Result<Option<String>, Error>;
+
     /// Every local branch, sorted by name.
     fn branches(&self) -> Result<Vec<Branch>, Error>;
 
@@ -116,6 +120,27 @@ impl GitRepo for GixRepo {
             )),
             None => Ok(None),
         }
+    }
+
+    fn remote_default_branch(&self, remote: &str) -> Result<Option<String>, Error> {
+        let repo = self.repo.to_thread_local();
+        let head = full_name(&format!("refs/remotes/{remote}/HEAD"))?;
+        let Some(reference) = repo.try_find_reference(&head).map_err(Error::git)? else {
+            return Ok(None);
+        };
+        let gix::refs::TargetRef::Symbolic(target) = reference.target() else {
+            return Ok(None);
+        };
+        let prefix = format!("refs/remotes/{remote}/");
+        let Some(name) = target
+            .as_bstr()
+            .to_string()
+            .strip_prefix(&prefix)
+            .map(str::to_owned)
+        else {
+            return Ok(None);
+        };
+        Ok(self.branch_tip(&name)?.map(|_| name))
     }
 
     fn branches(&self) -> Result<Vec<Branch>, Error> {
@@ -235,6 +260,24 @@ impl GitRepo for GixRepo {
             .collect::<Result<Vec<_>, Error>>()?;
         repo.edit_references(edits).map_err(Error::git)?;
         Ok(())
+    }
+}
+
+/// Creates an empty repository at `path` with `git init`, honouring the user's git config (e.g.
+/// `init.defaultBranch`).
+pub(crate) fn create_repository(path: &Path) -> Result<(), Error> {
+    let output = std::process::Command::new("git")
+        .arg("init")
+        .arg("--quiet")
+        .arg(path)
+        .output()
+        .map_err(Error::git)?;
+    if output.status.success() {
+        Ok(())
+    } else {
+        Err(Error::git(
+            String::from_utf8_lossy(&output.stderr).trim().to_owned(),
+        ))
     }
 }
 

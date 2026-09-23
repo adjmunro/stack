@@ -18,6 +18,7 @@ pub struct Workspace {
 /// The result of [`Workspace::add_trunk`].
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Marked {
+    pub name: String,
     pub outcome: Outcome,
     /// [`Role::Trunk`], or [`Role::Limb`] if the branch is stacked on a regular branch.
     pub role: Role,
@@ -43,6 +44,55 @@ impl Workspace {
         })
     }
 
+    /// Creates an empty git repository at `path` with `git init`.
+    ///
+    /// # Errors
+    /// [`Error::Git`] if `git init` fails.
+    pub fn create_repository(path: impl AsRef<Path>) -> Result<(), Error> {
+        crate::git::create_repository(path.as_ref())
+    }
+
+    /// Sets `stack` up: marks each of `trunks` as a trunk, or the [suggested trunk](Self::suggested_trunk) if
+    /// `trunks` is empty. Returns one result per trunk; empty if no trunk could be suggested.
+    ///
+    /// # Errors
+    /// As [`Self::add_trunk`].
+    pub fn init(&self, trunks: &[&str]) -> Result<Vec<Marked>, Error> {
+        let suggested = if trunks.is_empty() {
+            self.suggested_trunk()?
+        } else {
+            None
+        };
+        let trunks = trunks
+            .iter()
+            .map(|trunk| (*trunk).to_owned())
+            .chain(suggested);
+        trunks.map(|trunk| self.add_trunk(&trunk)).collect()
+    }
+
+    /// The branch most likely to be the trunk: `origin`'s default branch if it exists locally; else the current
+    /// branch if it is `main`, `master`, `develop`, or `trunk`; else the first of those that exists; else the current
+    /// branch. `None` if HEAD is detached and none of those exist.
+    pub fn suggested_trunk(&self) -> Result<Option<String>, Error> {
+        const CONVENTIONAL: [&str; 4] = ["main", "master", "develop", "trunk"];
+        if let Some(branch) = self.git.remote_default_branch("origin")? {
+            return Ok(Some(branch));
+        }
+        let current = self.current_branch()?;
+        if let Some(current) = current
+            .as_ref()
+            .filter(|current| CONVENTIONAL.contains(&current.as_str()))
+        {
+            return Ok(Some(current.clone()));
+        }
+        for name in CONVENTIONAL {
+            if self.git.branch_tip(name)?.is_some() {
+                return Ok(Some(name.to_owned()));
+            }
+        }
+        Ok(current)
+    }
+
     /// Reports the repository's current state.
     pub fn status(&self) -> Result<Status, Error> {
         Ok(Status {
@@ -63,23 +113,22 @@ impl Workspace {
     /// [`Error::UnknownBranch`].
     pub fn add_trunk(&self, name: &str) -> Result<Marked, Error> {
         let (metadata, resolution) = self.resolve()?;
-        self.require_branch(name)?;
+        let parent = match resolution.branches.get(name) {
+            Some(entry) => entry.parent.as_ref().map(|parent| parent.name.clone()),
+            // A branch with no commits yet can only be the current one.
+            None if self.current_branch()?.as_deref() == Some(name) => None,
+            None => return Err(Error::UnknownBranch { name: name.into() }),
+        };
+        let marked = |outcome, role, parent| Marked {
+            name: name.into(),
+            outcome,
+            role,
+            parent,
+        };
         if let Some(mark) = metadata.marks.get(name) {
-            let parent = resolution.branches[name]
-                .parent
-                .as_ref()
-                .map(|parent| parent.name.clone());
-            return Ok(Marked {
-                outcome: Outcome::Unchanged,
-                role: mark.value.role,
-                parent,
-            });
+            return Ok(marked(Outcome::Unchanged, mark.value.role, parent));
         }
-        let parent = resolution.branches[name]
-            .parent
-            .as_ref()
-            .map(|parent| parent.name.clone())
-            .filter(|parent| !metadata.marks.contains_key(parent));
+        let parent = parent.filter(|parent| !metadata.marks.contains_key(parent));
         let role = if parent.is_some() {
             Role::Limb
         } else {
@@ -87,11 +136,7 @@ impl Workspace {
         };
         let blob = self.git.write_blob(&metadata::encode(&Mark { role }))?;
         let outcome = self.update(format!("{}{name}", metadata::TRUNKS), None, Some(blob))?;
-        Ok(Marked {
-            outcome,
-            role,
-            parent,
-        })
+        Ok(marked(outcome, role, parent))
     }
 
     /// Unmarks a trunk. The branch itself is untouched; branches on it are resolved again.

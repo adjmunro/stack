@@ -1,11 +1,12 @@
 //! `stack`: stacked branches on top of git.
 
-use std::path::PathBuf;
+use std::io::{BufRead, IsTerminal, Write};
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
 use serde_json::{Value, to_value};
-use stack_core::{Head, Node, Outcome, Role, Source, Tree, Workspace};
+use stack_core::{Error, Head, Marked, Node, Outcome, Role, Source, Tree, Workspace};
 
 type Result<T, E = Box<dyn std::error::Error>> = std::result::Result<T, E>;
 
@@ -26,6 +27,15 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
+    /// Set up stack in this repository, creating the repository if needed.
+    Init {
+        /// Branch to mark as a trunk; repeatable [default: the remote's default branch, or a conventional name].
+        #[arg(short, long = "trunk", value_name = "BRANCH")]
+        trunks: Vec<String>,
+        /// Create a git repository without asking if there isn't one.
+        #[arg(short, long)]
+        yes: bool,
+    },
     /// Show the current branch.
     Status,
     /// Show trunks and the branches stacked on them.
@@ -74,7 +84,6 @@ fn main() -> ExitCode {
 
 fn run(cli: &Cli) -> Result<()> {
     let directory = cli.directory.clone().unwrap_or_else(|| PathBuf::from("."));
-    let workspace = Workspace::discover(directory)?;
     let print = |value: Value, human: String| {
         if cli.json {
             println!(
@@ -85,27 +94,31 @@ fn run(cli: &Cli) -> Result<()> {
             println!("{human}");
         }
     };
+    if let Command::Init { trunks, yes } = &cli.command {
+        let (value, human) = init(&directory, trunks, *yes)?;
+        print(value, human);
+        return Ok(());
+    }
+    let workspace = Workspace::discover(directory)?;
     match &cli.command {
+        Command::Init { .. } => unreachable!("handled above"),
         Command::Status => {
             let status = workspace.status()?;
             print(to_value(&status)?, describe(&status.head));
         }
         Command::Tree => {
             let tree = workspace.tree()?;
-            print(to_value(&tree)?, render(&tree));
+            let unborn = matches!(workspace.status()?.head, Head::Branch { commit: None, .. });
+            let human = if unborn && tree.trunks.is_empty() && tree.unattached.is_empty() {
+                "No commits yet.".to_owned()
+            } else {
+                render(&tree)
+            };
+            print(to_value(&tree)?, human);
         }
         Command::Trunk(TrunkCommand::Add { name }) => {
             let marked = workspace.add_trunk(name)?;
-            let stacked = marked
-                .parent
-                .as_ref()
-                .map(|parent| format!(" (stacked on {parent})"))
-                .unwrap_or_default();
-            let human = match marked.outcome {
-                Outcome::Changed => format!("Added trunk {name}{stacked}"),
-                Outcome::Unchanged => format!("{name} is already a trunk{stacked}"),
-            };
-            print(to_value(&marked)?, human);
+            print(to_value(&marked)?, describe_marked(&marked));
         }
         Command::Trunk(TrunkCommand::Remove { name }) => {
             let role = workspace.remove_trunk(name)?;
@@ -127,6 +140,64 @@ fn run(cli: &Cli) -> Result<()> {
         }
     }
     Ok(())
+}
+
+/// Sets up `stack`, creating a repository first if there isn't one and the user agrees.
+fn init(directory: &Path, trunks: &[String], yes: bool) -> Result<(Value, String)> {
+    let (workspace, created) = match Workspace::discover(directory) {
+        Err(Error::NotARepository { .. }) if yes || confirm_create(directory)? => {
+            Workspace::create_repository(directory)?;
+            (Workspace::discover(directory)?, true)
+        }
+        other => (other?, false),
+    };
+    let trunks: Vec<&str> = trunks.iter().map(String::as_str).collect();
+    let marked = workspace.init(&trunks)?;
+    let mut lines = Vec::new();
+    if created {
+        lines.push(format!(
+            "Created git repository in {}",
+            std::path::absolute(directory)?.display()
+        ));
+    }
+    lines.extend(marked.iter().map(describe_marked));
+    if marked.is_empty() {
+        lines.push("No trunk found; add one with `stack trunk add <branch>`".to_owned());
+    }
+    let value = serde_json::json!({ "created_repository": created, "trunks": marked });
+    Ok((value, lines.join("\n")))
+}
+
+/// Asks on the terminal whether to create a repository at `directory`.
+///
+/// # Errors
+/// Without a terminal, since there is no one to ask.
+fn confirm_create(directory: &Path) -> Result<bool> {
+    if !std::io::stdin().is_terminal() {
+        return Err("not a git repository; run `stack init --yes` to create one".into());
+    }
+    let shown = std::path::absolute(directory)?;
+    eprint!(
+        "No git repository at {}. Create one? [y/N] ",
+        shown.display()
+    );
+    std::io::stderr().flush()?;
+    let mut answer = String::new();
+    std::io::stdin().lock().read_line(&mut answer)?;
+    Ok(matches!(answer.trim(), "y" | "Y" | "yes" | "Yes"))
+}
+
+fn describe_marked(marked: &Marked) -> String {
+    let name = &marked.name;
+    let stacked = marked
+        .parent
+        .as_ref()
+        .map(|parent| format!(" (stacked on {parent})"))
+        .unwrap_or_default();
+    match marked.outcome {
+        Outcome::Changed => format!("Added trunk {name}{stacked}"),
+        Outcome::Unchanged => format!("{name} is already a trunk{stacked}"),
+    }
 }
 
 fn branch_or_current(workspace: &Workspace, branch: Option<&str>) -> Result<String> {
