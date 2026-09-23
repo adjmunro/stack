@@ -7,6 +7,15 @@ use gix::refs::{FullName, Target};
 
 use crate::{Error, Head};
 
+/// A local branch.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Branch {
+    pub name: String,
+    pub tip: String,
+    /// Seconds since the epoch of the branch's first reflog entry, if it has a reflog.
+    pub created: Option<i64>,
+}
+
 /// A ref that points directly at a blob, with the blob's contents.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct BlobRef {
@@ -33,8 +42,20 @@ pub(crate) trait GitRepo: Send + Sync {
     /// The commit at `refs/heads/<name>`, or `None` if there is no such branch.
     fn branch_tip(&self, name: &str) -> Result<Option<String>, Error>;
 
+    /// Every local branch, sorted by name.
+    fn branches(&self) -> Result<Vec<Branch>, Error>;
+
     /// The best common ancestor of two commits, or `None` if their histories are unrelated.
     fn merge_base(&self, one: &str, two: &str) -> Result<Option<String>, Error>;
+
+    /// Whether `ancestor` is reachable from `descendant`. A commit is its own ancestor.
+    fn is_ancestor(&self, ancestor: &str, descendant: &str) -> Result<bool, Error> {
+        Ok(ancestor == descendant
+            || self.merge_base(ancestor, descendant)?.as_deref() == Some(ancestor))
+    }
+
+    /// Commits reachable from `tip` but not from any of `hidden` (`git rev-list tip --not hidden...`).
+    fn commits_excluding(&self, tip: &str, hidden: &[String]) -> Result<Vec<String>, Error>;
 
     /// Every ref under `prefix` (which must end in `/`).
     ///
@@ -95,6 +116,45 @@ impl GitRepo for GixRepo {
             )),
             None => Ok(None),
         }
+    }
+
+    fn branches(&self) -> Result<Vec<Branch>, Error> {
+        let repo = self.repo.to_thread_local();
+        let platform = repo.references().map_err(Error::git)?;
+        let mut branches = Vec::new();
+        for reference in platform.local_branches().map_err(Error::git)? {
+            let reference = reference.map_err(Error::git)?;
+            let name = reference.name().shorten().to_string();
+            let created = match reference.log_iter().all().map_err(Error::git)? {
+                Some(mut lines) => match lines.next() {
+                    Some(line) => Some(line.map_err(Error::git)?.signature.seconds()),
+                    None => None,
+                },
+                None => None,
+            };
+            let tip = reference
+                .into_fully_peeled_id()
+                .map_err(Error::git)?
+                .to_string();
+            branches.push(Branch { name, tip, created });
+        }
+        branches.sort_by(|a, b| a.name.cmp(&b.name));
+        Ok(branches)
+    }
+
+    fn commits_excluding(&self, tip: &str, hidden: &[String]) -> Result<Vec<String>, Error> {
+        let repo = self.repo.to_thread_local();
+        let hidden = hidden
+            .iter()
+            .map(|id| object_id(id))
+            .collect::<Result<Vec<_>, _>>()?;
+        let walk = repo
+            .rev_walk([object_id(tip)?])
+            .with_hidden(hidden)
+            .all()
+            .map_err(Error::git)?;
+        walk.map(|info| Ok(info.map_err(Error::git)?.id.to_string()))
+            .collect()
     }
 
     fn merge_base(&self, one: &str, two: &str) -> Result<Option<String>, Error> {

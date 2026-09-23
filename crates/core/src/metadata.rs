@@ -1,26 +1,31 @@
 //! `stack` metadata stored as blob refs under `refs/stack/`.
 //!
-//! - `refs/stack/trunks/<name>` → `{"version":1}`
-//! - `refs/stack/branches/<name>` → `{"version":1,"parent":"<branch>","base":"<commit>"}`
-//!
-//! `base` is the commit `<name>` was last based on in its parent.
+//! - `refs/stack/trunks/<name>` → `{"version":1,"role":"trunk"|"limb"}`
+//! - `refs/stack/branches/<name>` → `{"version":1,"parent":"<branch>","offshoot":"<commit>","pinned":<bool>}`
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
-use crate::Error;
 use crate::git::{BlobRef, GitRepo};
+use crate::{Error, Role};
 
 pub(crate) const TRUNKS: &str = "refs/stack/trunks/";
 pub(crate) const BRANCHES: &str = "refs/stack/branches/";
 const VERSION: u32 = 1;
 
-/// A tracked branch's link to its parent.
+/// A branch marked with `stack trunk add`. `role` is inferred when marked: [`Role::Trunk`] or [`Role::Limb`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct Mark {
+    pub role: Role,
+}
+
+/// A recorded parent. `offshoot` is the version of the parent the branch was last known to be based on.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct Link {
     pub parent: String,
-    pub base: String,
+    pub offshoot: String,
+    pub pinned: bool,
 }
 
 /// A value read from a ref, with the ref's blob id for compare-and-swap updates.
@@ -37,79 +42,30 @@ struct Record<T> {
     value: T,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-struct Empty {}
-
 /// All `stack` metadata, as read at one moment.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct Metadata {
-    pub trunks: BTreeMap<String, Stored<()>>,
-    pub branches: BTreeMap<String, Stored<Link>>,
+    pub marks: BTreeMap<String, Stored<Mark>>,
+    pub links: BTreeMap<String, Stored<Link>>,
 }
 
 impl Metadata {
     pub(crate) fn load(git: &dyn GitRepo) -> Result<Self, Error> {
-        let trunks = git
+        let marks = git
             .blob_refs(TRUNKS)?
             .into_iter()
-            .map(|blob| {
-                decode::<Empty>(TRUNKS, blob).map(|(name, stored)| {
-                    (
-                        name,
-                        Stored {
-                            id: stored.id,
-                            value: (),
-                        },
-                    )
-                })
-            })
+            .map(|blob| decode(TRUNKS, blob))
             .collect::<Result<_, _>>()?;
-        let branches = git
+        let links = git
             .blob_refs(BRANCHES)?
             .into_iter()
-            .map(|blob| decode::<Link>(BRANCHES, blob))
+            .map(|blob| decode(BRANCHES, blob))
             .collect::<Result<_, _>>()?;
-        Ok(Self { trunks, branches })
-    }
-
-    pub(crate) fn is_trunk(&self, name: &str) -> bool {
-        self.trunks.contains_key(name)
-    }
-
-    /// Tracked branches whose parent is `name`, sorted.
-    pub(crate) fn children(&self, name: &str) -> Vec<String> {
-        self.branches
-            .iter()
-            .filter(|(_, stored)| stored.value.parent == name)
-            .map(|(child, _)| child.clone())
-            .collect()
-    }
-
-    /// `name` followed by its parent, grandparent, and so on. Stops at an untracked name or a repeat.
-    pub(crate) fn lineage<'a>(&'a self, name: &'a str) -> Vec<&'a str> {
-        let mut seen = BTreeSet::new();
-        let mut current = Some(name);
-        std::iter::from_fn(|| {
-            let name = current.filter(|name| seen.insert(*name))?;
-            current = self
-                .branches
-                .get(name)
-                .map(|stored| stored.value.parent.as_str());
-            Some(name)
-        })
-        .collect()
+        Ok(Self { marks, links })
     }
 }
 
-pub(crate) fn encode_trunk() -> Vec<u8> {
-    encode(Empty {})
-}
-
-pub(crate) fn encode_link(link: &Link) -> Vec<u8> {
-    encode(link.clone())
-}
-
-fn encode<T: Serialize>(value: T) -> Vec<u8> {
+pub(crate) fn encode<T: Serialize>(value: &T) -> Vec<u8> {
     let mut data = serde_json::to_vec(&Record {
         version: VERSION,
         value,
@@ -151,14 +107,19 @@ mod tests {
     use super::*;
 
     #[test]
-    fn link_encoding_is_stable() {
+    fn encodings_are_stable() {
         let link = Link {
             parent: "develop".into(),
-            base: "abc".into(),
+            offshoot: "abc".into(),
+            pinned: true,
         };
         assert_eq!(
-            encode_link(&link),
-            b"{\"version\":1,\"parent\":\"develop\",\"base\":\"abc\"}\n"
+            encode(&link),
+            b"{\"version\":1,\"parent\":\"develop\",\"offshoot\":\"abc\",\"pinned\":true}\n"
+        );
+        assert_eq!(
+            encode(&Mark { role: Role::Limb }),
+            b"{\"version\":1,\"role\":\"limb\"}\n"
         );
     }
 
@@ -167,27 +128,11 @@ mod tests {
         let blob = BlobRef {
             name: format!("{TRUNKS}develop"),
             id: "0".into(),
-            data: br#"{"version":2}"#.to_vec(),
+            data: br#"{"version":2,"role":"trunk"}"#.to_vec(),
         };
         assert!(matches!(
-            decode::<Empty>(TRUNKS, blob),
+            decode::<Mark>(TRUNKS, blob),
             Err(Error::CorruptMetadata { .. })
         ));
-    }
-
-    #[test]
-    fn lineage_stops_at_cycles() {
-        let link = |parent: &str| Stored {
-            id: String::new(),
-            value: Link {
-                parent: parent.into(),
-                base: String::new(),
-            },
-        };
-        let metadata = Metadata {
-            trunks: BTreeMap::new(),
-            branches: BTreeMap::from([("a".into(), link("b")), ("b".into(), link("a"))]),
-        };
-        assert_eq!(metadata.lineage("a"), ["a", "b"]);
     }
 }

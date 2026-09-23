@@ -1,15 +1,35 @@
-use std::collections::BTreeSet;
 use std::path::Path;
 
+use serde::Serialize;
+
 use crate::git::{GitRepo, GixRepo, RefUpdate};
-use crate::metadata::{self, Link, Metadata};
-use crate::{Error, Head, Node, Outcome, Status, Tree};
+use crate::metadata::{self, Link, Mark, Metadata};
+use crate::resolve::Resolution;
+use crate::{Error, Head, Outcome, Role, Status, Tree};
 
 /// Entry point for all `stack` operations on one repository.
 ///
-/// Mutations are compare-and-swap: each fails without changes if the metadata it read was changed concurrently.
+/// Queries never write. Mutations are compare-and-swap: each fails without changes if the metadata it read was
+/// changed concurrently.
 pub struct Workspace {
     git: Box<dyn GitRepo>,
+}
+
+/// The result of [`Workspace::add_trunk`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct Marked {
+    pub outcome: Outcome,
+    /// [`Role::Trunk`], or [`Role::Limb`] if the branch is stacked on a regular branch.
+    pub role: Role,
+    /// The branch it is stacked on, for a limb.
+    pub parent: Option<String>,
+}
+
+/// The result of [`Workspace::pin`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct Pinned {
+    pub outcome: Outcome,
+    pub parent: String,
 }
 
 impl Workspace {
@@ -23,149 +43,174 @@ impl Workspace {
         })
     }
 
-    /// Reports the repository's current state. Read-only.
+    /// Reports the repository's current state.
     pub fn status(&self) -> Result<Status, Error> {
         Ok(Status {
             head: self.git.head()?,
         })
     }
 
-    /// Every trunk and the branches stacked on it. Read-only.
+    /// Every trunk and the branches stacked on it, resolved from the commit graph and recorded parents.
     pub fn tree(&self) -> Result<Tree, Error> {
-        let metadata = Metadata::load(&*self.git)?;
-        let current = match self.git.head()? {
-            Head::Branch { name, .. } => Some(name),
-            Head::Detached { .. } => None,
-        };
-        let mut builder = TreeBuilder {
-            git: &*self.git,
-            metadata: &metadata,
-            current,
-            visited: BTreeSet::new(),
-        };
-        let mut trunks = Vec::new();
-        for name in metadata.trunks.keys() {
-            trunks.push(builder.node(name)?);
-        }
-        // Roots first, so orphans keep their children. Anything still unvisited sits in a cycle of corrupt metadata.
-        let (roots, rest): (Vec<_>, Vec<_>) = metadata.branches.iter().partition(|(_, stored)| {
-            let parent = &stored.value.parent;
-            !metadata.is_trunk(parent) && !metadata.branches.contains_key(parent)
-        });
-        let mut orphans = Vec::new();
-        for (name, _) in roots.into_iter().chain(rest) {
-            if !builder.visited.contains(name) {
-                orphans.push(builder.node(name)?);
-            }
-        }
-        orphans.sort_by(|a, b| a.name.cmp(&b.name));
-        Ok(Tree { trunks, orphans })
+        let resolution = self.resolve()?.1;
+        Ok(resolution.tree(self.current_branch()?.as_deref()))
     }
 
-    /// Makes the existing branch `name` a trunk.
+    /// Marks the existing branch `name` as a trunk. Its role is inferred: a limb if it is stacked on a regular
+    /// branch, otherwise a trunk.
     ///
     /// # Errors
-    /// [`Error::UnknownBranch`], or [`Error::IsTracked`] if `name` is stacked on another branch.
-    pub fn add_trunk(&self, name: &str) -> Result<Outcome, Error> {
-        let metadata = Metadata::load(&*self.git)?;
+    /// [`Error::UnknownBranch`].
+    pub fn add_trunk(&self, name: &str) -> Result<Marked, Error> {
+        let (metadata, resolution) = self.resolve()?;
         self.require_branch(name)?;
-        if metadata.is_trunk(name) {
-            return Ok(Outcome::Unchanged);
+        if let Some(mark) = metadata.marks.get(name) {
+            let parent = resolution.branches[name]
+                .parent
+                .as_ref()
+                .map(|parent| parent.name.clone());
+            return Ok(Marked {
+                outcome: Outcome::Unchanged,
+                role: mark.value.role,
+                parent,
+            });
         }
-        if metadata.branches.contains_key(name) {
-            return Err(Error::IsTracked { name: name.into() });
-        }
-        let blob = self.git.write_blob(&metadata::encode_trunk())?;
-        self.update(format!("{}{name}", metadata::TRUNKS), None, Some(blob))
+        let parent = resolution.branches[name]
+            .parent
+            .as_ref()
+            .map(|parent| parent.name.clone())
+            .filter(|parent| !metadata.marks.contains_key(parent));
+        let role = if parent.is_some() {
+            Role::Limb
+        } else {
+            Role::Trunk
+        };
+        let blob = self.git.write_blob(&metadata::encode(&Mark { role }))?;
+        let outcome = self.update(format!("{}{name}", metadata::TRUNKS), None, Some(blob))?;
+        Ok(Marked {
+            outcome,
+            role,
+            parent,
+        })
     }
 
-    /// Stops treating `name` as a trunk. The branch itself is untouched.
+    /// Unmarks a trunk. The branch itself is untouched; branches on it are resolved again.
     ///
     /// # Errors
-    /// [`Error::NotTrunk`], or [`Error::HasChildren`] while branches are stacked on it.
-    pub fn remove_trunk(&self, name: &str) -> Result<Outcome, Error> {
+    /// [`Error::NotTrunk`].
+    pub fn remove_trunk(&self, name: &str) -> Result<Role, Error> {
         let metadata = Metadata::load(&*self.git)?;
         let stored = metadata
-            .trunks
+            .marks
             .get(name)
             .ok_or_else(|| Error::NotTrunk { name: name.into() })?;
-        require_childless(&metadata, name)?;
         self.update(
             format!("{}{name}", metadata::TRUNKS),
             Some(stored.id.clone()),
             None,
-        )
+        )?;
+        Ok(stored.value.role)
     }
 
-    /// Records `parent` as the parent of `branch`, based at their merge base. Re-tracking changes the parent.
+    /// Pins `parent` as the parent of `branch`, overriding the commit graph. Without `parent`, pins the currently
+    /// resolved one.
     ///
     /// # Errors
     /// - [`Error::UnknownBranch`] if either branch doesn't exist.
     /// - [`Error::IsTrunk`] if `branch` is a trunk.
-    /// - [`Error::UntrackedParent`] if `parent` is neither a trunk nor tracked.
+    /// - [`Error::NoParent`] if `parent` is omitted and `branch` has none.
     /// - [`Error::Cycle`] if `parent` is `branch` or stacked on it.
     /// - [`Error::Unrelated`] if they share no history.
-    pub fn track(&self, branch: &str, parent: &str) -> Result<Outcome, Error> {
-        let metadata = Metadata::load(&*self.git)?;
+    pub fn pin(&self, branch: &str, parent: Option<&str>) -> Result<Pinned, Error> {
+        let (metadata, resolution) = self.resolve()?;
         let tip = self.require_branch(branch)?;
-        let parent_tip = self.require_branch(parent)?;
-        if metadata.is_trunk(branch) {
+        let entry = &resolution.branches[branch];
+        if entry.role == Role::Trunk {
             return Err(Error::IsTrunk {
                 name: branch.into(),
             });
         }
-        if !metadata.is_trunk(parent) && !metadata.branches.contains_key(parent) {
-            return Err(Error::UntrackedParent {
-                name: parent.into(),
-            });
-        }
-        if metadata.lineage(parent).contains(&branch) {
+        let parent = match parent {
+            Some(parent) => parent.to_owned(),
+            None => entry
+                .parent
+                .as_ref()
+                .ok_or_else(|| Error::NoParent {
+                    name: branch.into(),
+                })?
+                .name
+                .clone(),
+        };
+        let parent_tip = self.require_branch(&parent)?;
+        if resolution.lineage(&parent).contains(&branch) {
             return Err(Error::Cycle {
                 branch: branch.into(),
-                parent: parent.into(),
+                parent,
             });
         }
-        let base = self
-            .git
-            .merge_base(&tip, &parent_tip)?
-            .ok_or_else(|| Error::Unrelated {
-                branch: branch.into(),
-                parent: parent.into(),
-            })?;
-        let link = Link {
-            parent: parent.into(),
-            base,
+        let offshoot = match entry
+            .parent
+            .as_ref()
+            .filter(|current| current.name == parent)
+        {
+            Some(current) => current.offshoot.clone(),
+            None => self
+                .git
+                .merge_base(&tip, &parent_tip)?
+                .ok_or_else(|| Error::Unrelated {
+                    branch: branch.into(),
+                    parent: parent.clone(),
+                })?,
         };
-        let old = metadata.branches.get(branch);
+        let link = Link {
+            parent: parent.clone(),
+            offshoot,
+            pinned: true,
+        };
+        let old = metadata.links.get(branch);
         if old.is_some_and(|stored| stored.value == link) {
-            return Ok(Outcome::Unchanged);
+            return Ok(Pinned {
+                outcome: Outcome::Unchanged,
+                parent,
+            });
         }
-        let blob = self.git.write_blob(&metadata::encode_link(&link))?;
-        self.update(
-            format!("{}{branch}", metadata::BRANCHES),
-            old.map(|stored| stored.id.clone()),
-            Some(blob),
-        )
+        let blob = self.git.write_blob(&metadata::encode(&link))?;
+        let old = old.map(|stored| stored.id.clone());
+        let outcome = self.update(format!("{}{branch}", metadata::BRANCHES), old, Some(blob))?;
+        Ok(Pinned { outcome, parent })
     }
 
-    /// Forgets `branch`'s parent. The branch itself is untouched, and needn't still exist.
+    /// Removes a pin, so the parent is worked out automatically again.
     ///
     /// # Errors
-    /// [`Error::NotTracked`], or [`Error::HasChildren`] while branches are stacked on it.
-    pub fn untrack(&self, branch: &str) -> Result<Outcome, Error> {
+    /// [`Error::NotPinned`].
+    pub fn unpin(&self, branch: &str) -> Result<Outcome, Error> {
         let metadata = Metadata::load(&*self.git)?;
         let stored = metadata
-            .branches
+            .links
             .get(branch)
-            .ok_or_else(|| Error::NotTracked {
+            .filter(|stored| stored.value.pinned)
+            .ok_or_else(|| Error::NotPinned {
                 name: branch.into(),
             })?;
-        require_childless(&metadata, branch)?;
         self.update(
             format!("{}{branch}", metadata::BRANCHES),
             Some(stored.id.clone()),
             None,
         )
+    }
+
+    fn resolve(&self) -> Result<(Metadata, Resolution), Error> {
+        let metadata = Metadata::load(&*self.git)?;
+        let resolution = Resolution::resolve(&*self.git, &metadata)?;
+        Ok((metadata, resolution))
+    }
+
+    fn current_branch(&self) -> Result<Option<String>, Error> {
+        Ok(match self.git.head()? {
+            Head::Branch { name, .. } => Some(name),
+            Head::Detached { .. } => None,
+        })
     }
 
     fn require_branch(&self, name: &str) -> Result<String, Error> {
@@ -182,42 +227,5 @@ impl Workspace {
     ) -> Result<Outcome, Error> {
         self.git.update_refs(&[RefUpdate { name, old, new }])?;
         Ok(Outcome::Changed)
-    }
-}
-
-struct TreeBuilder<'a> {
-    git: &'a dyn GitRepo,
-    metadata: &'a Metadata,
-    current: Option<String>,
-    visited: BTreeSet<String>,
-}
-
-impl TreeBuilder<'_> {
-    fn node(&mut self, name: &str) -> Result<Node, Error> {
-        self.visited.insert(name.to_owned());
-        let mut children = Vec::new();
-        for child in self.metadata.children(name) {
-            if !self.visited.contains(&child) {
-                children.push(self.node(&child)?);
-            }
-        }
-        Ok(Node {
-            name: name.to_owned(),
-            commit: self.git.branch_tip(name)?,
-            current: self.current.as_deref() == Some(name),
-            children,
-        })
-    }
-}
-
-fn require_childless(metadata: &Metadata, name: &str) -> Result<(), Error> {
-    let children = metadata.children(name);
-    if children.is_empty() {
-        Ok(())
-    } else {
-        Err(Error::HasChildren {
-            name: name.into(),
-            children,
-        })
     }
 }

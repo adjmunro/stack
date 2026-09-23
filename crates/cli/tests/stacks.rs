@@ -3,7 +3,7 @@ mod common;
 use common::{stack, stderr, stdout};
 use stack_testkit::Fixture;
 
-/// `develop` ← `feat/a` ← `feat/b`, plus `feat/c` on `develop`. HEAD on `feat/c`. Nothing tracked.
+/// `develop` ← `feat/a` ← `feat/b`, plus `feat/c` on `develop`. HEAD on `feat/c`. No trunks.
 fn repo() -> Fixture {
     let fixture = Fixture::new();
     fixture.commit("base.txt", "base", "feat: base");
@@ -21,29 +21,18 @@ fn short(fixture: &Fixture, branch: &str) -> String {
 }
 
 #[test]
-fn builds_and_renders_a_tree() {
+fn tree_is_derived_from_the_graph_once_a_trunk_exists() {
     let fixture = repo();
+    assert_eq!(
+        stdout(&stack(&fixture, &["tree"])),
+        "No trunks. Add one with `stack trunk add <branch>`.\n"
+    );
 
     assert_eq!(
         stdout(&stack(&fixture, &["trunk", "add", "develop"])),
         "Added trunk develop\n"
     );
-    assert_eq!(
-        stdout(&stack(
-            &fixture,
-            &["track", "feat/a", "--parent", "develop"]
-        )),
-        "Tracked feat/a on develop\n"
-    );
-    assert_eq!(
-        stdout(&stack(&fixture, &["track", "feat/b", "-p", "feat/a"])),
-        "Tracked feat/b on feat/a\n"
-    );
-    // Defaults to the current branch.
-    assert_eq!(
-        stdout(&stack(&fixture, &["track", "-p", "develop"])),
-        "Tracked feat/c on develop\n"
-    );
+    let before = fixture.snapshot();
 
     let [develop, a, b, c] =
         ["develop", "feat/a", "feat/b", "feat/c"].map(|branch| short(&fixture, branch));
@@ -56,13 +45,42 @@ fn builds_and_renders_a_tree() {
              └─ * feat/c {c}\n"
         )
     );
+    fixture.assert_unchanged(&before);
+}
+
+#[test]
+fn tree_shows_limbs_pins_moves_and_restack_needs() {
+    let fixture = repo();
+    stack(&fixture, &["trunk", "add", "develop"]);
+    assert_eq!(
+        stdout(&stack(&fixture, &["trunk", "add", "feat/b"])),
+        "Added trunk feat/b (stacked on feat/a)\n"
+    );
+    assert_eq!(
+        stdout(&stack(&fixture, &["pin", "feat/a"])),
+        "Pinned feat/a on develop\n"
+    );
+    fixture.git(&["switch", "--quiet", "develop"]);
+    fixture.commit("later.txt", "later", "feat: later");
+
+    let [develop, a, b, c] =
+        ["develop", "feat/a", "feat/b", "feat/c"].map(|branch| short(&fixture, branch));
+    assert_eq!(
+        stdout(&stack(&fixture, &["tree"])),
+        format!(
+            "* develop {develop}\n\
+             ├─ feat/a {a} [pinned] (needs restack)\n\
+             │  └─ feat/b {b} [trunk]\n\
+             └─ feat/c {c} (needs restack)\n"
+        )
+    );
 }
 
 #[test]
 fn repeated_commands_report_no_change() {
     let fixture = repo();
     stack(&fixture, &["trunk", "add", "develop"]);
-    stack(&fixture, &["track", "-p", "develop"]);
+    stack(&fixture, &["pin"]);
     let before = fixture.snapshot();
 
     assert_eq!(
@@ -70,12 +88,14 @@ fn repeated_commands_report_no_change() {
         "develop is already a trunk\n"
     );
     assert_eq!(
-        stdout(&stack(&fixture, &["track", "-p", "develop"])),
-        "feat/c is already tracked on develop\n"
+        stdout(&stack(&fixture, &["pin"])),
+        "feat/c is already pinned on develop\n"
     );
+    let json: serde_json::Value =
+        serde_json::from_str(&stdout(&stack(&fixture, &["pin", "--json"]))).unwrap();
     assert_eq!(
-        stdout(&stack(&fixture, &["track", "--json", "-p", "develop"])),
-        "\"unchanged\"\n"
+        json,
+        serde_json::json!({ "outcome": "unchanged", "parent": "develop" })
     );
     fixture.assert_unchanged(&before);
 }
@@ -84,7 +104,8 @@ fn repeated_commands_report_no_change() {
 fn tree_json_is_the_core_view_model() {
     let fixture = repo();
     stack(&fixture, &["trunk", "add", "develop"]);
-    stack(&fixture, &["track", "-p", "develop"]);
+    fixture.git(&["branch", "--quiet", "-D", "feat/b"]);
+    fixture.git(&["branch", "--quiet", "-D", "feat/a"]);
 
     let json: serde_json::Value =
         serde_json::from_str(&stdout(&stack(&fixture, &["tree", "--json"]))).unwrap();
@@ -96,37 +117,43 @@ fn tree_json_is_the_core_view_model() {
             "trunks": [{
                 "name": "develop",
                 "commit": commit("develop"),
+                "role": "trunk",
                 "current": false,
-                "children": [{ "name": "feat/c", "commit": commit("feat/c"), "current": true, "children": [] }],
+                "parent": null,
+                "children": [{
+                    "name": "feat/c",
+                    "commit": commit("feat/c"),
+                    "role": "branch",
+                    "current": true,
+                    "parent": {
+                        "name": "develop",
+                        "offshoot": commit("develop"),
+                        "source": "derived",
+                        "needs_restack": false,
+                        "contradicted": false,
+                        "replaces": null,
+                    },
+                    "children": [],
+                }],
             }],
-            "orphans": [],
+            "unattached": [],
         })
     );
 }
 
 #[test]
-fn tree_without_trunks_explains_how_to_add_one() {
-    let fixture = repo();
-    assert_eq!(
-        stdout(&stack(&fixture, &["tree"])),
-        "No trunks. Add one with `stack trunk add <branch>`.\n"
-    );
-}
-
-#[test]
-fn deleted_and_orphaned_branches_are_shown() {
+fn unattached_branches_are_listed_separately() {
     let fixture = repo();
     stack(&fixture, &["trunk", "add", "develop"]);
-    stack(&fixture, &["track", "feat/a", "-p", "develop"]);
-    stack(&fixture, &["track", "feat/b", "-p", "feat/a"]);
-    fixture.git(&["switch", "--quiet", "develop"]);
-    fixture.git(&["branch", "--quiet", "-D", "feat/b"]);
-    fixture.git(&["update-ref", "-d", "refs/stack/branches/feat/a"]);
+    fixture.git(&["switch", "--quiet", "--orphan", "pages"]);
+    fixture.commit("index.html", "hi", "feat: pages");
 
-    let develop = short(&fixture, "develop");
-    assert_eq!(
-        stdout(&stack(&fixture, &["tree"])),
-        format!("* develop {develop}\n\nParent missing:\nfeat/b (deleted)\n")
+    let output = stdout(&stack(&fixture, &["tree"]));
+
+    let pages = short(&fixture, "pages");
+    assert!(
+        output.ends_with(&format!("\nUnattached:\n* pages {pages}\n")),
+        "{output}"
     );
 }
 
@@ -134,25 +161,20 @@ fn deleted_and_orphaned_branches_are_shown() {
 fn errors_exit_non_zero_without_changes() {
     let fixture = repo();
     stack(&fixture, &["trunk", "add", "develop"]);
-    stack(&fixture, &["track", "feat/a", "-p", "develop"]);
-    stack(&fixture, &["track", "feat/b", "-p", "feat/a"]);
     let before = fixture.snapshot();
 
     let cases: [(&[&str], &str); 5] = [
         (
-            &["untrack", "feat/a"],
-            "error: feat/a has tracked children: feat/b\n",
-        ),
-        (
-            &["trunk", "remove", "develop"],
-            "error: develop has tracked children: feat/a\n",
-        ),
-        (
-            &["track", "feat/a", "-p", "feat/b"],
+            &["pin", "feat/a", "-p", "feat/b"],
             "error: feat/b is feat/a or stacked on it; that would create a cycle\n",
         ),
-        (&["track", "-p", "nope"], "error: no such branch: nope\n"),
-        (&["untrack"], "error: feat/c is not tracked\n"),
+        (&["pin", "-p", "nope"], "error: no such branch: nope\n"),
+        (&["pin", "develop"], "error: develop is a trunk\n"),
+        (&["unpin"], "error: feat/c is not pinned\n"),
+        (
+            &["trunk", "remove", "feat/a"],
+            "error: feat/a is not a trunk\n",
+        ),
     ];
     for (args, message) in cases {
         assert_eq!(stderr(&stack(&fixture, args)), message, "{args:?}");
@@ -167,19 +189,19 @@ fn detached_head_needs_an_explicit_branch() {
     fixture.git(&["switch", "--quiet", "--detach"]);
 
     assert_eq!(
-        stderr(&stack(&fixture, &["track", "-p", "develop"])),
+        stderr(&stack(&fixture, &["pin"])),
         "error: HEAD is detached; name a branch\n"
     );
 }
 
 #[test]
-fn untrack_and_remove_trunk_undo_setup() {
+fn unpin_and_trunk_remove_undo_setup() {
     let fixture = repo();
     let before = fixture.snapshot();
     stack(&fixture, &["trunk", "add", "develop"]);
-    stack(&fixture, &["track", "-p", "develop"]);
+    stack(&fixture, &["pin"]);
 
-    assert_eq!(stdout(&stack(&fixture, &["untrack"])), "Untracked feat/c\n");
+    assert_eq!(stdout(&stack(&fixture, &["unpin"])), "Unpinned feat/c\n");
     assert_eq!(
         stdout(&stack(&fixture, &["trunk", "remove", "develop"])),
         "Removed trunk develop\n"

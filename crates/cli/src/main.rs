@@ -5,7 +5,7 @@ use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
 use serde_json::{Value, to_value};
-use stack_core::{Head, Node, Outcome, Tree, Workspace};
+use stack_core::{Head, Node, Outcome, Role, Source, Tree, Workspace};
 
 type Result<T, E = Box<dyn std::error::Error>> = std::result::Result<T, E>;
 
@@ -33,26 +33,26 @@ enum Command {
     /// Manage trunks: the long-lived branches stacks are based on.
     #[command(subcommand)]
     Trunk(TrunkCommand),
-    /// Record a branch's parent. Re-run to change it.
-    Track {
-        /// Branch to track [default: current branch].
+    /// Fix a branch's parent, overriding what the commit graph implies.
+    Pin {
+        /// Branch to pin [default: current branch].
         branch: Option<String>,
-        /// Trunk or tracked branch to stack it on.
+        /// Parent to pin it to [default: its current parent].
         #[arg(short, long)]
-        parent: String,
+        parent: Option<String>,
     },
-    /// Forget a branch's parent. The branch itself is untouched.
-    Untrack {
-        /// Branch to untrack [default: current branch].
+    /// Remove a pin, so the parent is worked out automatically again.
+    Unpin {
+        /// Branch to unpin [default: current branch].
         branch: Option<String>,
     },
 }
 
 #[derive(Subcommand)]
 enum TrunkCommand {
-    /// Make an existing branch a trunk.
+    /// Mark an existing branch as a trunk.
     Add { name: String },
-    /// Stop treating a branch as a trunk. The branch itself is untouched.
+    /// Unmark a trunk. The branch itself is untouched.
     Remove { name: String },
 }
 
@@ -82,52 +82,48 @@ fn run(cli: &Cli) -> Result<()> {
                 serde_json::to_string_pretty(&value).expect("JSON values serialise")
             );
         } else {
-            print!("{human}");
+            println!("{human}");
         }
     };
     match &cli.command {
         Command::Status => {
             let status = workspace.status()?;
-            print(to_value(&status)?, format!("{}\n", describe(&status.head)));
+            print(to_value(&status)?, describe(&status.head));
         }
         Command::Tree => {
             let tree = workspace.tree()?;
             print(to_value(&tree)?, render(&tree));
         }
         Command::Trunk(TrunkCommand::Add { name }) => {
-            let outcome = workspace.add_trunk(name)?;
-            print(
-                to_value(outcome)?,
-                confirm(
-                    outcome,
-                    format!("Added trunk {name}"),
-                    format!("{name} is already a trunk"),
-                ),
-            );
+            let marked = workspace.add_trunk(name)?;
+            let stacked = marked
+                .parent
+                .as_ref()
+                .map(|parent| format!(" (stacked on {parent})"))
+                .unwrap_or_default();
+            let human = match marked.outcome {
+                Outcome::Changed => format!("Added trunk {name}{stacked}"),
+                Outcome::Unchanged => format!("{name} is already a trunk{stacked}"),
+            };
+            print(to_value(&marked)?, human);
         }
         Command::Trunk(TrunkCommand::Remove { name }) => {
-            let outcome = workspace.remove_trunk(name)?;
-            print(
-                to_value(outcome)?,
-                confirm(outcome, format!("Removed trunk {name}"), String::new()),
-            );
+            let role = workspace.remove_trunk(name)?;
+            print(to_value(role)?, format!("Removed trunk {name}"));
         }
-        Command::Track { branch, parent } => {
+        Command::Pin { branch, parent } => {
             let branch = branch_or_current(&workspace, branch.as_deref())?;
-            let outcome = workspace.track(&branch, parent)?;
-            let unchanged = format!("{branch} is already tracked on {parent}");
-            print(
-                to_value(outcome)?,
-                confirm(outcome, format!("Tracked {branch} on {parent}"), unchanged),
-            );
+            let pinned = workspace.pin(&branch, parent.as_deref())?;
+            let human = match pinned.outcome {
+                Outcome::Changed => format!("Pinned {branch} on {}", pinned.parent),
+                Outcome::Unchanged => format!("{branch} is already pinned on {}", pinned.parent),
+            };
+            print(to_value(&pinned)?, human);
         }
-        Command::Untrack { branch } => {
+        Command::Unpin { branch } => {
             let branch = branch_or_current(&workspace, branch.as_deref())?;
-            let outcome = workspace.untrack(&branch)?;
-            print(
-                to_value(outcome)?,
-                confirm(outcome, format!("Untracked {branch}"), String::new()),
-            );
+            let outcome = workspace.unpin(&branch)?;
+            print(to_value(outcome)?, format!("Unpinned {branch}"));
         }
     }
     Ok(())
@@ -138,13 +134,6 @@ fn branch_or_current(workspace: &Workspace, branch: Option<&str>) -> Result<Stri
         (Some(branch), _) => Ok(branch.to_owned()),
         (None, Head::Branch { name, .. }) => Ok(name),
         (None, Head::Detached { .. }) => Err("HEAD is detached; name a branch".into()),
-    }
-}
-
-fn confirm(outcome: Outcome, changed: String, unchanged: String) -> String {
-    match outcome {
-        Outcome::Changed => format!("{changed}\n"),
-        Outcome::Unchanged => format!("{unchanged}\n"),
     }
 }
 
@@ -161,29 +150,51 @@ fn describe(head: &Head) -> String {
 
 /// Draws the tree with box-drawing guides. The current branch is marked `*`.
 fn render(tree: &Tree) -> String {
-    let mut out = String::new();
-    if tree.trunks.is_empty() && tree.orphans.is_empty() {
-        out.push_str("No trunks. Add one with `stack trunk add <branch>`.\n");
+    let mut lines = Vec::new();
+    if tree.trunks.is_empty() {
+        lines.push("No trunks. Add one with `stack trunk add <branch>`.".to_owned());
     }
     for trunk in &tree.trunks {
-        render_node(trunk, "", "", &mut out);
+        render_node(trunk, "", "", &mut lines);
     }
-    if !tree.orphans.is_empty() {
-        out.push_str("\nParent missing:\n");
-        for orphan in &tree.orphans {
-            render_node(orphan, "", "", &mut out);
+    if !tree.trunks.is_empty() && !tree.unattached.is_empty() {
+        lines.push(String::new());
+        lines.push("Unattached:".to_owned());
+        for node in &tree.unattached {
+            render_node(node, "", "", &mut lines);
         }
     }
-    out
+    lines.join("\n")
 }
 
-fn render_node(node: &Node, lead: &str, indent: &str, out: &mut String) {
+fn render_node(node: &Node, lead: &str, indent: &str, lines: &mut Vec<String>) {
     let marker = if node.current { "* " } else { "" };
-    let commit = node
-        .commit
-        .as_deref()
-        .map_or_else(|| "(deleted)".to_owned(), |commit| short(commit).to_owned());
-    out.push_str(&format!("{lead}{marker}{} {commit}\n", node.name));
+    let mut notes = Vec::new();
+    if node.role == Role::Limb {
+        notes.push("[trunk]".to_owned());
+    }
+    if let Some(parent) = &node.parent {
+        match (parent.source, parent.contradicted) {
+            (Source::Pinned, false) => notes.push("[pinned]".to_owned()),
+            (Source::Pinned, true) => notes.push("[pinned; graph disagrees]".to_owned()),
+            _ => {}
+        }
+        if let Some(previous) = &parent.replaces {
+            notes.push(format!("(was on {previous})"));
+        }
+        if parent.needs_restack {
+            notes.push("(needs restack)".to_owned());
+        }
+    }
+    let notes = notes
+        .iter()
+        .map(|note| format!(" {note}"))
+        .collect::<String>();
+    lines.push(format!(
+        "{lead}{marker}{} {}{notes}",
+        node.name,
+        short(&node.commit)
+    ));
     for (index, child) in node.children.iter().enumerate() {
         let last = index + 1 == node.children.len();
         let (lead, next) = if last {
@@ -195,7 +206,7 @@ fn render_node(node: &Node, lead: &str, indent: &str, out: &mut String) {
             child,
             &format!("{indent}{lead}"),
             &format!("{indent}{next}"),
-            out,
+            lines,
         );
     }
 }

@@ -6,9 +6,10 @@
 mod error;
 mod git;
 mod metadata;
+mod resolve;
 mod view;
 mod workspace;
 
 pub use error::Error;
-pub use view::{Head, Node, Outcome, Status, Tree};
-pub use workspace::Workspace;
+pub use view::{Head, Node, Outcome, Parent, Role, Source, Status, Tree};
+pub use workspace::{Marked, Pinned, Workspace};

@@ -18,31 +18,23 @@ pub enum Error {
     #[error("no such branch: {name}")]
     UnknownBranch { name: String },
 
-    /// `name` is neither a trunk nor tracked, so it can't be a parent.
-    #[error("{name} is not a trunk or tracked branch; add it as a trunk or track it first")]
-    UntrackedParent { name: String },
-
     /// `name` is a trunk, which has no parent.
     #[error("{name} is a trunk")]
     IsTrunk { name: String },
 
-    /// `name` is tracked, so it can't also be a trunk.
-    #[error("{name} is tracked; untrack it first")]
-    IsTracked { name: String },
-
-    #[error("{name} is not tracked")]
-    NotTracked { name: String },
-
     #[error("{name} is not a trunk")]
     NotTrunk { name: String },
+
+    #[error("{name} is not pinned")]
+    NotPinned { name: String },
+
+    /// `name` has no parent to pin.
+    #[error("{name} has no parent; name one with --parent")]
+    NoParent { name: String },
 
     /// Making `parent` the parent of `branch` would create a cycle.
     #[error("{parent} is {branch} or stacked on it; that would create a cycle")]
     Cycle { branch: String, parent: String },
-
-    /// `name` still has tracked children, which would be left without a parent.
-    #[error("{name} has tracked children: {}", children.join(", "))]
-    HasChildren { name: String, children: Vec<String> },
 
     /// `branch` and `parent` share no history.
     #[error("{branch} and {parent} have no common ancestor")]
