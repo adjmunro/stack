@@ -1,4 +1,5 @@
 use std::cell::Cell;
+use std::ffi::OsString;
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -119,31 +120,45 @@ impl Fixture {
     ///
     /// Use this to run the `stack` binary under test.
     pub fn command(&self, program: impl AsRef<std::ffi::OsStr>) -> Command {
+        let mut command = Command::new(program);
+        // Clearing the environment drops inherited GIT_DIR, GIT_WORK_TREE, etc., which would otherwise
+        // redirect git (and gix) at whatever repo the test runner was launched from.
+        command
+            .current_dir(self.path())
+            .env_clear()
+            .envs(self.environment());
+        command
+    }
+
+    /// The complete, isolated environment fixture commands run with: no system or global git config, a fixed
+    /// identity, and the next tick of the fixture clock as the author and committer date.
+    ///
+    /// Pass it to code under test that runs `git` itself, so the developer's own config (signing, merge options)
+    /// can't leak in.
+    pub fn environment(&self) -> Vec<(OsString, OsString)> {
         let now = self.clock.get();
         self.clock.set(now + 1);
         let date = format!("{now} +0000");
         let home = self.dir.path().join("home");
-
-        let mut command = Command::new(program);
-        command
-            .current_dir(self.path())
-            // Clearing the environment drops inherited GIT_DIR, GIT_WORK_TREE, etc., which would otherwise
-            // redirect git (and gix) at whatever repo the test runner was launched from.
-            .env_clear()
-            .env("PATH", std::env::var_os("PATH").unwrap_or_default())
-            .env("HOME", &home)
-            .env("XDG_CONFIG_HOME", home.join(".config"))
-            .env("GIT_CONFIG_NOSYSTEM", "1")
-            .env("GIT_CONFIG_GLOBAL", home.join(".gitconfig"))
-            .env("GIT_CEILING_DIRECTORIES", self.dir.path())
-            .env("GIT_AUTHOR_NAME", "Fixture Author")
-            .env("GIT_AUTHOR_EMAIL", "author@fixture.invalid")
-            .env("GIT_AUTHOR_DATE", &date)
-            .env("GIT_COMMITTER_NAME", "Fixture Committer")
-            .env("GIT_COMMITTER_EMAIL", "committer@fixture.invalid")
-            .env("GIT_COMMITTER_DATE", &date)
-            .env("LC_ALL", "C");
-        command
+        let pairs: [(&str, OsString); 13] = [
+            ("PATH", std::env::var_os("PATH").unwrap_or_default()),
+            ("HOME", home.clone().into()),
+            ("XDG_CONFIG_HOME", home.join(".config").into()),
+            ("GIT_CONFIG_NOSYSTEM", "1".into()),
+            ("GIT_CONFIG_GLOBAL", home.join(".gitconfig").into()),
+            ("GIT_CEILING_DIRECTORIES", self.dir.path().into()),
+            ("GIT_AUTHOR_NAME", "Fixture Author".into()),
+            ("GIT_AUTHOR_EMAIL", "author@fixture.invalid".into()),
+            ("GIT_AUTHOR_DATE", date.clone().into()),
+            ("GIT_COMMITTER_NAME", "Fixture Committer".into()),
+            ("GIT_COMMITTER_EMAIL", "committer@fixture.invalid".into()),
+            ("GIT_COMMITTER_DATE", date.into()),
+            ("LC_ALL", "C".into()),
+        ];
+        pairs
+            .into_iter()
+            .map(|(key, value)| (key.into(), value))
+            .collect()
     }
 
     /// Captures the repo's current state.
