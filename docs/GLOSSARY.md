@@ -20,8 +20,10 @@ Canonical vocabulary for the project. Prefer these names in code, schema, and do
 - **Surface**: a consumer of the core (CLI, GUI, MCP).
 - **Metadata**: authoritative `stack` state stored in git refs under `refs/stack/`.
 - **Cache**: local, rebuildable, or personal state stored in `.git/stack/` (SQLite).
-- **Op log**: the record of every `stack` mutation, used for undo.
-- **Journal**: intent records written before a mutation, used to recover from a crash mid-operation.
+- **Op log**: the record of every `stack` mutation (SQLite), used for undo and redo. It is also the journal.
+- **Journal**: the op log's role as crash recovery: each mutation is recorded as pending before refs change, then marked done.
+- **Keep tree**: `refs/stack/keep`, a tree of metadata blobs the op log may restore, so they survive `git gc`.
+- **Former tip**: a commit a branch pointed at before (from its reflog). Counts as a version of the branch only if confirmed.
 - **Review mark**: a flag (e.g. reviewed, flagged) on a commit, keyed by `patch-id` so it survives rebases that don't change the commit's diff.
 - **Fixture**: a throwaway git repo built by tests.
 - **Snapshot**: a full capture of a repo's refs, reachable objects, index, and working tree, diffed to prove what an operation changed.

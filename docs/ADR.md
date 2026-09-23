@@ -97,3 +97,12 @@
 - Detail: Pushing branches and opening PRs are separate commands, so a wide push (e.g. a backup) never opens a wave of PRs.
 - Reason: A rootward limb may be someone else's; a leafward limb is yours but starts a separate batch of review work.
 - Reason: A release branch cut from a trunk looks the same as a checkpoint on a trunk. Treating both as trunks means the failure mode is "not auto-restacked", never "release branch rebased onto develop".
+
+2026-09-23T13:02Z@17e63722
+- Category: op log
+- Detail: One SQLite store (`<common dir>/stack/stack.db`, rusqlite with bundled SQLite) is both the op log and the crash journal. Tables: `operation` (kind command/undo/redo, state pending/done/failed, undone flag) and `ref_update` (old/new per ref).
+- Detail: Created by the first mutation; reads never create or write it. Opening a workspace resolves pending operations: all refs new → done; all old → failed; otherwise left pending and reported.
+- Detail: Undo/redo follow editor semantics: undo reverts the latest command not undone; redo re-applies the most recently undone command until a new command runs. Both refuse if a ref changed outside `stack` since.
+- Detail: Metadata blobs a mutation stops referencing are added to a tree at `refs/stack/keep` in the same ref transaction, so undo works after `gc`. Trees, like blobs, stay out of `git log --all`.
+- Detail: Commits (for restack) will rely on branch reflogs for gc protection, since git logs every branch update; deleted branches need another mechanism.
+- Reason: Bundled SQLite gives one known version everywhere at the cost of a C toolchain at build time.
