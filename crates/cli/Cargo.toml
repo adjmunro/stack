@@ -12,9 +12,8 @@ path = "src/main.rs"
 [dependencies]
 stack-core.workspace = true
 clap.workspace = true
-serde_json.workspace = true
+serde_json = { workspace = true, features = ["preserve_order"] }
 
 [dev-dependencies]
 stack-testkit.workspace = true
-serde_json.workspace = true
 tempfile.workspace = true
