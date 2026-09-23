@@ -1,0 +1,20 @@
+[package]
+name = "stack-cli"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "stack"
+path = "src/main.rs"
+
+[dependencies]
+stack-core.workspace = true
+clap.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+stack-testkit.workspace = true
+serde_json.workspace = true
+tempfile.workspace = true
