@@ -560,6 +560,10 @@ impl GitRepo for GixRepo {
 
     fn update_refs(&self, updates: &[RefUpdate], message: &str) -> Result<(), Error> {
         let repo = self.repo.to_thread_local();
+        let checked_out = repo
+            .head_name()
+            .map_err(Error::git)?
+            .map(|name| name.as_bstr().to_string());
         let edits = updates
             .iter()
             .map(|update| {
@@ -588,10 +592,13 @@ impl GitRepo for GixRepo {
                         log: RefLog::AndReference,
                     },
                 };
+                // Updating the checked-out branch through HEAD also records the move in HEAD's reflog, as git does.
+                let through_head =
+                    update.new.is_some() && checked_out.as_deref() == Some(update.name.as_str());
                 Ok(RefEdit {
                     change,
-                    name: full_name(&update.name)?,
-                    deref: false,
+                    name: full_name(if through_head { "HEAD" } else { &update.name })?,
+                    deref: through_head,
                 })
             })
             .collect::<Result<Vec<_>, Error>>()?;

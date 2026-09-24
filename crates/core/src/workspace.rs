@@ -200,8 +200,8 @@ impl Workspace {
         Ok(marked(outcome, role, parent))
     }
 
-    /// Rebases `branch` and every branch leafward of it (through limbs) onto their parents' current tips, and records
-    /// each one's parent. For a trunk, restacks every branch on it; the trunk itself never moves.
+    /// Rebases `branch` and every branch leafward of it (through limbs) onto their parents' current tips, records
+    /// each one's parent, and drops the records of branches that no longer exist. For a trunk, restacks every branch on it; the trunk itself never moves.
     ///
     /// All moves apply in one journalled transaction (one undo). If a commit conflicts, that branch and the branches
     /// on it are left as they were, the rest are restacked, and [`Restacked::conflict`] says how to finish by hand.
@@ -237,6 +237,16 @@ impl Workspace {
                 old: old.map(|stored| stored.id.clone()),
                 new: Some(self.git.write_blob(&metadata::encode(link))?),
             });
+        }
+        // Records of branches that no longer exist.
+        for (name, stored) in &metadata.links {
+            if !resolution.branches.contains_key(name) {
+                updates.push(RefUpdate {
+                    name: format!("{}{name}", metadata::BRANCHES),
+                    old: Some(stored.id.clone()),
+                    new: None,
+                });
+            }
         }
         let outcome = if updates.is_empty() {
             Outcome::Unchanged

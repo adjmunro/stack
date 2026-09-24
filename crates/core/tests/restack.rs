@@ -185,6 +185,28 @@ fn checked_out_branch_moves_with_its_working_tree() {
 }
 
 #[test]
+fn moving_the_checked_out_branch_is_logged_in_head_and_branch_reflogs() {
+    let fixture = advanced();
+    fixture.git(&["switch", "--quiet", "b"]);
+
+    workspace(&fixture).restack("develop").unwrap();
+
+    let new_tip = tip(&fixture, "b");
+    for reference in ["HEAD", "b"] {
+        let entry = fixture.git(&["reflog", "-1", "--format=%H %gs", reference]);
+        assert_eq!(
+            entry,
+            format!("{new_tip} stack: restack develop"),
+            "{reference}"
+        );
+    }
+    assert_eq!(
+        fixture.git(&["reflog", "-1", "--format=%gs", "a"]),
+        "stack: restack develop"
+    );
+}
+
+#[test]
 fn uncommitted_changes_on_a_moving_branch_are_refused() {
     let fixture = advanced();
     fixture.git(&["switch", "--quiet", "b"]);
@@ -320,6 +342,27 @@ fn undo_puts_every_branch_back() {
     );
     assert!(refs_only(&diff), "{diff}");
     assert_eq!(fixture.git(&["status", "--porcelain"]), "");
+}
+
+#[test]
+fn records_of_deleted_branches_are_pruned_and_undo_restores_them() {
+    let fixture = advanced();
+    grow(&fixture, "gone", "develop");
+    workspace(&fixture).pin("gone", None).unwrap();
+    fixture.git(&["switch", "--quiet", "develop"]);
+    fixture.git(&["branch", "--quiet", "-D", "gone"]);
+
+    workspace(&fixture).restack("develop").unwrap();
+    assert_eq!(
+        fixture.git(&["for-each-ref", "refs/stack/branches/gone"]),
+        ""
+    );
+
+    workspace(&fixture).undo().unwrap();
+    assert_ne!(
+        fixture.git(&["for-each-ref", "refs/stack/branches/gone"]),
+        ""
+    );
 }
 
 #[test]
