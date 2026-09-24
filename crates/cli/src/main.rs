@@ -7,8 +7,8 @@ use std::process::ExitCode;
 use clap::{Parser, Subcommand};
 use serde_json::{Value, to_value};
 use stack_core::{
-    Error, Head, Marked, Node, Operation, OperationState, Outcome, RecoveryOutcome, Restacked,
-    Role, Source, Tree, Workspace,
+    Conflict, Error, Head, Marked, Node, Operation, OperationState, Outcome, RecoveryOutcome,
+    RestackPreview, Restacked, Role, Source, Tree, Workspace,
 };
 
 type Result<T, E = Box<dyn std::error::Error>> = std::result::Result<T, E>;
@@ -62,6 +62,11 @@ enum Command {
     /// Rebase a branch and everything stacked on it onto their parents' current tips.
     Restack {
         /// Branch to restack; a trunk restacks every stack on it [default: current branch].
+        branch: Option<String>,
+    },
+    /// Preview a restack: which branches would conflict. Changes nothing; fails if any would.
+    Check {
+        /// Branch to check, with everything on it [default: every trunk].
         branch: Option<String>,
     },
     /// Move a branch onto a different parent, taking the branches on it along.
@@ -168,16 +173,23 @@ fn run(cli: &Cli) -> Result<()> {
             let branch = branch_or_current(&workspace, branch.as_deref())?;
             let restacked = workspace.restack(&branch)?;
             print(to_value(&restacked)?, describe_restack(&restacked));
-            if let Some(conflict) = &restacked.conflict {
-                return Err(format!("restack stopped at a conflict in {}", conflict.branch).into());
+            if !restacked.conflicts.is_empty() {
+                return Err("restack stopped at a conflict".into());
+            }
+        }
+        Command::Check { branch } => {
+            let preview = workspace.check(branch.as_deref())?;
+            print(to_value(&preview)?, describe_preview(&preview));
+            if !preview.conflicts.is_empty() {
+                return Err("a restack would conflict".into());
             }
         }
         Command::Move { branch, onto } => {
             let branch = branch_or_current(&workspace, branch.as_deref())?;
             let restacked = workspace.move_branch(&branch, onto)?;
             print(to_value(&restacked)?, describe_restack(&restacked));
-            if let Some(conflict) = &restacked.conflict {
-                return Err(format!("move stopped at a conflict in {}", conflict.branch).into());
+            if !restacked.conflicts.is_empty() {
+                return Err("move stopped at a conflict".into());
             }
         }
         Command::Undo => {
@@ -235,43 +247,75 @@ fn describe_restack(restacked: &Restacked) -> String {
         .moved
         .iter()
         .map(|moved| {
-            let plural = if moved.replayed == 1 { "" } else { "s" };
-            let dropped = match moved.dropped {
-                0 => String::new(),
-                count => format!("; {count} already in {}", moved.onto),
-            };
             format!(
-                "Restacked {} onto {} ({} commit{plural}{dropped})",
-                moved.name, moved.onto, moved.replayed
+                "Restacked {} onto {} ({})",
+                moved.name,
+                moved.onto,
+                count(moved.replayed, moved.dropped, &moved.onto)
             )
         })
         .collect();
-    match &restacked.conflict {
-        Some(conflict) => {
-            let paths = conflict.paths.join(", ");
-            lines.push(format!(
-                "Conflict: {} \"{}\" ({}) conflicts with {} in {paths}",
-                conflict.branch,
-                conflict.summary,
-                short(&conflict.commit),
-                conflict.onto
-            ));
-            lines.push(format!(
-                "Left {} and the branches on it as they were. To finish:",
-                conflict.branch
-            ));
-            lines.push(format!(
-                "  git rebase --onto {} {} {}",
-                conflict.onto,
-                short(&conflict.offshoot),
-                conflict.branch
-            ));
-            lines.push(format!("  stack restack {}", conflict.branch));
-        }
-        None if restacked.moved.is_empty() => lines.push("Everything is up to date.".to_owned()),
-        None => {}
+    for conflict in &restacked.conflicts {
+        lines.push(describe_conflict(conflict));
+        lines.push(format!(
+            "Left {} and the branches on it as they were. To finish:",
+            conflict.branch
+        ));
+        lines.push(format!(
+            "  git rebase --onto {} {} {}",
+            conflict.onto,
+            short(&conflict.offshoot),
+            conflict.branch
+        ));
+        lines.push(format!("  stack restack {}", conflict.branch));
+    }
+    if restacked.moved.is_empty() && restacked.conflicts.is_empty() {
+        lines.push("Everything is up to date.".to_owned());
     }
     lines.join("\n")
+}
+
+fn describe_preview(preview: &RestackPreview) -> String {
+    let mut lines: Vec<String> = preview
+        .clean
+        .iter()
+        .map(|moved| {
+            format!(
+                "{} restacks cleanly onto {} ({})",
+                moved.name,
+                moved.onto,
+                count(moved.replayed, moved.dropped, &moved.onto)
+            )
+        })
+        .collect();
+    lines.extend(preview.conflicts.iter().map(describe_conflict));
+    lines.extend(preview.blocked.iter().map(|branch| {
+        format!("{branch} can't be checked until the conflict below it is resolved")
+    }));
+    if lines.is_empty() {
+        lines.push("Everything is up to date.".to_owned());
+    }
+    lines.join("\n")
+}
+
+fn describe_conflict(conflict: &Conflict) -> String {
+    format!(
+        "Conflict: {} \"{}\" ({}) conflicts with {} in {}",
+        conflict.branch,
+        conflict.summary,
+        short(&conflict.commit),
+        conflict.onto,
+        conflict.paths.join(", ")
+    )
+}
+
+/// "2 commits", "1 commit; 1 already in develop".
+fn count(replayed: usize, dropped: usize, onto: &str) -> String {
+    let plural = if replayed == 1 { "" } else { "s" };
+    match dropped {
+        0 => format!("{replayed} commit{plural}"),
+        dropped => format!("{replayed} commit{plural}; {dropped} already in {onto}"),
+    }
 }
 
 fn describe_operation(operation: &Operation) -> String {

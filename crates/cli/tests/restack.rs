@@ -66,10 +66,7 @@ fn conflict_explains_how_to_finish_and_fails() {
              stack restack feat/a\n"
         )
     );
-    assert_eq!(
-        stderr(&output),
-        "error: restack stopped at a conflict in feat/a\n"
-    );
+    assert_eq!(stderr(&output), "error: restack stopped at a conflict\n");
 }
 
 #[test]
@@ -124,4 +121,29 @@ fn move_takes_descendants_along() {
         stderr(&stack(&fixture, &["move", "feat/x", "--onto", "feat/b"])),
         "error: feat/b is feat/x or stacked on it; that would create a cycle\n"
     );
+}
+
+#[test]
+fn check_previews_without_changing_anything() {
+    let fixture = advanced();
+    let before = fixture.snapshot();
+
+    assert_eq!(
+        stdout(&stack(&fixture, &["check"])),
+        "feat/a restacks cleanly onto develop (1 commit)\nfeat/b restacks cleanly onto feat/a (1 commit)\n"
+    );
+    assert!(before.diff(&fixture.snapshot()).refs.is_empty());
+
+    fixture.git(&["switch", "--quiet", "develop"]);
+    fixture.commit("a.txt", "clash", "feat: clash");
+    let output = stack(&fixture, &["check"]);
+    let commit = fixture.git(&["rev-parse", "--short=7", "feat/a"]);
+    assert_eq!(
+        String::from_utf8(output.stdout.clone()).unwrap(),
+        format!(
+            "Conflict: feat/a \"feat: a\" ({commit}) conflicts with develop in a.txt\n\
+             feat/b can't be checked until the conflict below it is resolved\n"
+        )
+    );
+    assert_eq!(stderr(&output), "error: a restack would conflict\n");
 }
