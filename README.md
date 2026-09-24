@@ -31,7 +31,7 @@ stack sync                        # after they merge: fast-forward develop, arch
 | Area | Commands |
 |---|---|
 | Set up | `init`, `trunk add/remove`, `import graphite` |
-| See | `tree [--check] [-- <paths>]`, `status`, `check`, `delta <a> [b]`, `review`, `lost` |
+| See | `tree [<branch>] [--check] [-- <paths>]`, `status`, `check`, `delta <a> [b]`, `review`, `lost` |
 | Rewrite | `restack`, `move <branches…> --onto`, `chain`, `split`, `amend --into`, `absorb`, `continue`, `abort`, `sync` |
 | Share | `push`, `pr` (both take `--rootward`, `--leafward`, `--all`) |
 | Move around | `up`, `down`, `top`, `bottom`, `create` |
