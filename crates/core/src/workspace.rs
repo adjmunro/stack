@@ -8,7 +8,8 @@ use crate::journal::Journal;
 use crate::metadata::{self, Link, Mark, Metadata};
 use crate::resolve::Resolution;
 use crate::{
-    Error, Head, Moved, Operation, OperationKind, Outcome, Recovered, Restacked, Role, Status, Tree,
+    Error, Head, Moved, Operation, OperationKind, Outcome, Parent, Recovered, Restacked, Role,
+    Status, Tree,
 };
 
 /// Entry point for all `stack` operations on one repository.
@@ -217,7 +218,69 @@ impl Workspace {
                 name: branch.into(),
             });
         }
-        let plan = crate::restack::plan(&*self.git, &resolution, branch)?;
+        self.apply_restack(&metadata, &resolution, branch, &format!("restack {branch}"))
+    }
+
+    /// Moves `branch` onto `onto`: replays its own commits onto `onto`'s tip, restacks everything leafward of it, and
+    /// records `onto` as its parent (still pinned, if it was). Otherwise as [`Self::restack`].
+    ///
+    /// # Errors
+    /// - [`Error::UnknownBranch`] if either branch doesn't exist.
+    /// - [`Error::IsTrunk`] if `branch` is a trunk; [`Error::NoParent`] if it's unattached.
+    /// - [`Error::Cycle`] if `onto` is `branch` or stacked on it.
+    /// - As [`Self::restack`].
+    pub fn move_branch(&self, branch: &str, onto: &str) -> Result<Restacked, Error> {
+        let (metadata, mut resolution) = self.resolve()?;
+        let onto_entry = resolution
+            .branches
+            .get(onto)
+            .ok_or_else(|| Error::UnknownBranch { name: onto.into() })?;
+        let onto_tip = onto_entry.tip.clone();
+        let entry = resolution
+            .branches
+            .get(branch)
+            .ok_or_else(|| Error::UnknownBranch {
+                name: branch.into(),
+            })?;
+        if entry.role == Role::Trunk {
+            return Err(Error::IsTrunk {
+                name: branch.into(),
+            });
+        }
+        if resolution.lineage(onto).contains(&branch) {
+            return Err(Error::Cycle {
+                branch: branch.into(),
+                parent: onto.into(),
+            });
+        }
+        let parent = entry.parent.clone().ok_or_else(|| Error::NoParent {
+            name: branch.into(),
+        })?;
+        let entry = resolution.branches.get_mut(branch).expect("checked above");
+        entry.parent = Some(Parent {
+            name: onto.into(),
+            needs_restack: parent.offshoot != onto_tip,
+            contradicted: false,
+            replaces: None,
+            ..parent
+        });
+        self.apply_restack(
+            &metadata,
+            &resolution,
+            branch,
+            &format!("move {branch} onto {onto}"),
+        )
+    }
+
+    /// Plans restacking `target` over `resolution` and applies it as one journalled command called `description`.
+    fn apply_restack(
+        &self,
+        metadata: &Metadata,
+        resolution: &Resolution,
+        target: &str,
+        description: &str,
+    ) -> Result<Restacked, Error> {
+        let plan = crate::restack::plan(&*self.git, resolution, target)?;
         let mut updates: Vec<RefUpdate> = plan
             .moves
             .iter()
@@ -251,11 +314,10 @@ impl Workspace {
         let outcome = if updates.is_empty() {
             Outcome::Unchanged
         } else {
-            let description = format!("restack {branch}");
             self.journal.transact(
                 &*self.git,
                 OperationKind::Command,
-                &description,
+                description,
                 None,
                 updates,
             )?;
