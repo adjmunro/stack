@@ -21,7 +21,6 @@ You should remove bullets point when they are or become complete and fully imple
 - Track by signature, not by line? (Or line-content hash? Such as with hash-based edits for LLMs)
 - Auto-save commits
 - LLM generated messages & smart squash message rewrites
-- Commit header linter / customisable rules
 - Easier git hooks for toolchain checks
 - When resolving conflicts, click & drag to include a selected hunk instead of / as well as whole hunk and individual line options
 - Import filtering for diffs (Or some kind of “in `*.kt` ignore lines that start with `import *`)
