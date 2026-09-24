@@ -72,6 +72,7 @@ mod push;
 mod resolving;
 pub use resolving::{ResolveOutcome, Resolving};
 mod restack;
+mod split;
 mod sync;
 pub use sync::{Synced, TrunkSync, TrunkUpdate};
 mod review;

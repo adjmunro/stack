@@ -123,6 +123,10 @@ pub enum Error {
     #[error("these commits aren't built on {branch}'s current tip; sync or rebase onto it first")]
     NotFastForward { branch: String },
 
+    /// `revision` isn't one of `branch`'s own commits (or is its tip), so a branch there wouldn't split it.
+    #[error("{revision} isn't one of {branch}'s own commits below its tip")]
+    NotOwnCommit { branch: String, revision: String },
+
     #[error("{name} is already archived")]
     AlreadyArchived { name: String },
 
