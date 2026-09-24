@@ -234,6 +234,20 @@ pub enum Direction {
     Leafward,
 }
 
+/// A step through a stack for [`crate::Workspace::step`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Step {
+    /// To the parent, `n` times. May land on a trunk.
+    Down(usize),
+    /// To the only child, `n` times.
+    Up(usize),
+    /// Up through only children to a leaf.
+    Top,
+    /// Down to the first branch of the stack: the nearest limb, or else the branch just leafward of the trunk.
+    Bottom,
+}
+
 /// The result of [`crate::Workspace::push`].
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Pushed {

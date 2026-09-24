@@ -408,6 +408,12 @@ mod tests {
         fn set_upstream(&self, branch: &str, remote: &str) -> Result<(), Error> {
             self.inner.set_upstream(branch, remote)
         }
+        fn switch(&self, branch: &str, create: bool) -> Result<(), Error> {
+            self.inner.switch(branch, create)
+        }
+        fn commit_index(&self, message: &str, all: bool) -> Result<(), Error> {
+            self.inner.commit_index(message, all)
+        }
         fn update_refs(&self, updates: &[RefUpdate], message: &str) -> Result<(), Error> {
             if self.apply_refs {
                 self.inner.update_refs(updates, message)?;

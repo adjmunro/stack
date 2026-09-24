@@ -160,6 +160,13 @@ pub(crate) trait GitRepo: Send + Sync {
 
     /// Makes `remote`/`branch` the upstream of local `branch`.
     fn set_upstream(&self, branch: &str, remote: &str) -> Result<(), Error>;
+
+    /// Checks out `branch` (`git switch`), creating it at HEAD first if `create`. Git refuses, without changes, if
+    /// local changes would be overwritten.
+    fn switch(&self, branch: &str, create: bool) -> Result<(), Error>;
+
+    /// Commits the index (`git commit`), staging changes to tracked files first if `all`. Runs the user's hooks.
+    fn commit_index(&self, message: &str, all: bool) -> Result<(), Error>;
 }
 
 /// A branch to push, and the value its remote-tracking ref had when last fetched.
@@ -638,6 +645,23 @@ impl GitRepo for GixRepo {
             return Err(command_error(&command, &output));
         }
         Ok(statuses)
+    }
+
+    fn switch(&self, branch: &str, create: bool) -> Result<(), Error> {
+        let args: &[&str] = if create {
+            &["switch", "--quiet", "--create", branch]
+        } else {
+            &["switch", "--quiet", branch]
+        };
+        run_ok(&mut self.git(args), b"").map(|_| ())
+    }
+
+    fn commit_index(&self, message: &str, all: bool) -> Result<(), Error> {
+        let mut args = vec!["commit", "--quiet", "--file=-"];
+        if all {
+            args.push("--all");
+        }
+        run_ok(&mut self.git(&args), message.as_bytes()).map(|_| ())
     }
 
     fn set_upstream(&self, branch: &str, remote: &str) -> Result<(), Error> {

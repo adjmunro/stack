@@ -90,6 +90,14 @@ pub enum Error {
     )]
     UpstreamMismatch { branch: String, upstream: String },
 
+    /// `name` has no branches stacked on it.
+    #[error("{name} has no branches on it")]
+    NoChildren { name: String },
+
+    /// `name` has several branches stacked on it, so "up" is ambiguous.
+    #[error("{name} has several branches on it: {}; choose one", children.join(", "))]
+    SeveralChildren { name: String, children: Vec<String> },
+
     /// The op log (SQLite) failed.
     #[error("op log: {0}")]
     Store(BoxError),
