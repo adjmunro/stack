@@ -54,7 +54,7 @@ fn conflict_explains_how_to_finish_and_fails() {
     fixture.git(&["switch", "--quiet", "develop"]);
     fixture.commit("a.txt", "clash", "feat: clash");
 
-    let output = stack(&fixture, &["restack", "develop"]);
+    let output = stack(&fixture, &["restack", "develop", "--no-resolve"]);
 
     let commit = fixture.git(&["rev-parse", "--short=7", "feat/a"]);
     assert_eq!(
@@ -75,7 +75,7 @@ fn following_the_conflict_instructions_finishes_the_restack() {
     let offshoot = fixture.git(&["rev-parse", "develop~1"]);
     fixture.git(&["switch", "--quiet", "develop"]);
     fixture.commit("a.txt", "clash", "feat: clash");
-    stack(&fixture, &["restack", "develop"]);
+    stack(&fixture, &["restack", "develop", "--no-resolve"]);
 
     let rebase = fixture
         .command("git")
@@ -161,4 +161,55 @@ fn tree_check_marks_conflicts_and_blocked_branches() {
         "{tree}"
     );
     assert!(tree.contains("(restack blocked below)"), "{tree}");
+}
+
+#[test]
+fn a_conflict_starts_git_s_rebase_and_continue_finishes() {
+    let fixture = advanced();
+    fixture.git(&["switch", "--quiet", "develop"]);
+    fixture.commit("a.txt", "clash", "feat: clash");
+
+    let output = stack(&fixture, &["restack", "develop"]);
+
+    let commit = fixture.git(&["rev-parse", "--short=7", "feat/a"]);
+    assert_eq!(
+        String::from_utf8(output.stdout.clone()).unwrap(),
+        format!(
+            "Conflict: feat/a \"feat: a\" ({commit}) conflicts with develop in a.txt\n\
+             Resolving feat/a: fix the conflicts in a.txt, `git add` them, then run `stack continue` (or `stack abort`)\n"
+        )
+    );
+    assert!(stdout(&stack(&fixture, &["status"])).ends_with(
+        "Restacking develop: waiting on a conflict in feat/a (`stack continue` or `stack abort`)\n"
+    ));
+    assert_eq!(
+        stderr(&stack(&fixture, &["continue"])),
+        "error: resolve the conflicts in a.txt and `git add` them first\n"
+    );
+
+    fixture.write("a.txt", "resolved");
+    fixture.git(&["add", "a.txt"]);
+    assert_eq!(
+        stdout(&stack(&fixture, &["continue"])),
+        "Restacked feat/b onto feat/a (1 commit)\n"
+    );
+    assert_eq!(
+        fixture.git(&["log", "--format=%s", "develop..feat/b"]),
+        "feat: b\nfeat: a"
+    );
+    assert_eq!(
+        stderr(&stack(&fixture, &["continue"])),
+        "error: no restack is waiting to continue\n"
+    );
+}
+
+#[test]
+fn abort_stops_resolving() {
+    let fixture = advanced();
+    fixture.git(&["switch", "--quiet", "develop"]);
+    fixture.commit("a.txt", "clash", "feat: clash");
+    stack(&fixture, &["restack", "develop"]);
+
+    assert!(stdout(&stack(&fixture, &["abort"])).starts_with("Stopped resolving feat/a"));
+    assert!(!fixture.path().join(".git/rebase-merge").exists());
 }

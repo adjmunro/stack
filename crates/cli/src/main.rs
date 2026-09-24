@@ -9,8 +9,8 @@ use serde_json::{Value, to_value};
 use stack_core::{
     CommitRange, CommitReview, Conflict, Direction, Error, FollowPosition, FollowerSync,
     GuardViolation, Head, MarkKind, Marked, Node, Operation, OperationState, Outcome,
-    ProposalAction, ProposedBranch, PushOutcome, Pushed, RecoveryOutcome, RestackPreview,
-    Restacked, Role, Scope, Source, Step, SyncOutcome, Tree, Workspace, Worktree,
+    ProposalAction, ProposedBranch, PushOutcome, Pushed, RecoveryOutcome, ResolveOutcome,
+    RestackPreview, Restacked, Role, Scope, Source, Step, SyncOutcome, Tree, Workspace, Worktree,
 };
 
 type Result<T, E = Box<dyn std::error::Error>> = std::result::Result<T, E>;
@@ -72,7 +72,14 @@ enum Command {
     Restack {
         /// Branch to restack; a trunk restacks every stack on it [default: current branch].
         branch: Option<String>,
+        /// On a conflict, print how to finish by hand instead of starting git's rebase for you.
+        #[arg(long)]
+        no_resolve: bool,
     },
+    /// Carry on after resolving a restack conflict (and `git add`ing the files).
+    Continue,
+    /// Give up on a restack that's waiting at a conflict.
+    Abort,
     /// Preview a restack: which branches would conflict. Changes nothing; fails if any would.
     Check {
         /// Branch to check, with everything on it [default: every trunk].
@@ -85,6 +92,9 @@ enum Command {
         /// Its new parent.
         #[arg(long)]
         onto: String,
+        /// On a conflict, print how to finish by hand instead of starting git's rebase for you.
+        #[arg(long)]
+        no_resolve: bool,
     },
     /// Push a branch's line: its parents down to the nearest trunk, and the branches on it up to the next trunks.
     Push(LineArgs),
@@ -330,7 +340,14 @@ fn run(cli: &Cli) -> Result<()> {
         Command::Init { .. } => unreachable!("handled above"),
         Command::Status => {
             let status = workspace.status()?;
-            print(to_value(&status)?, describe(&status.head));
+            let mut human = describe(&status.head);
+            if let Some(waiting) = workspace.resolving()? {
+                human.push_str(&format!(
+                    "\nRestacking {}: waiting on a conflict in {} (`stack continue` or `stack abort`)",
+                    waiting.target, waiting.branch
+                ));
+            }
+            print(to_value(&status)?, human);
         }
         Command::Tree { check, paths } => {
             let tree = if paths.is_empty() {
@@ -377,14 +394,40 @@ fn run(cli: &Cli) -> Result<()> {
             let outcome = workspace.unpin(&branch)?;
             print(to_value(outcome)?, format!("Unpinned {branch}"));
         }
-        Command::Restack { branch } => {
+        Command::Restack { branch, no_resolve } => {
             let branch = branch_or_current(&workspace, branch.as_deref())?;
             let restacked = workspace.restack(&branch)?;
-            print(to_value(&restacked)?, describe_restack(&restacked));
-            note_follower_syncs(&workspace)?;
-            if !restacked.conflicts.is_empty() {
-                return Err("restack stopped at a conflict".into());
+            finish_restack(&workspace, &branch, restacked, *no_resolve, &print)?;
+        }
+        Command::Continue => {
+            let target = workspace.resolving()?.map(|waiting| waiting.target);
+            let outcome = workspace.continue_restack()?;
+            match outcome {
+                ResolveOutcome::Stopped { branch, paths } => {
+                    print(
+                        to_value(ResolveOutcome::Stopped {
+                            branch: branch.clone(),
+                            paths: paths.clone(),
+                        })?,
+                        describe_stopped(&branch, &paths),
+                    );
+                    return Err("restack stopped at a conflict".into());
+                }
+                ResolveOutcome::Finished(restacked) => {
+                    let target = target.unwrap_or_default();
+                    finish_restack(&workspace, &target, restacked, false, &print)?;
+                }
             }
+        }
+        Command::Abort => {
+            let aborted = workspace.abort_restack()?;
+            print(
+                to_value(&aborted)?,
+                format!(
+                    "Stopped resolving {}; branches already restacked stay restacked (`stack undo` reverts them)",
+                    aborted.branch
+                ),
+            );
         }
         Command::Check { branch } => {
             let preview = workspace.check(branch.as_deref())?;
@@ -393,14 +436,14 @@ fn run(cli: &Cli) -> Result<()> {
                 return Err("a restack would conflict".into());
             }
         }
-        Command::Move { branch, onto } => {
+        Command::Move {
+            branch,
+            onto,
+            no_resolve,
+        } => {
             let branch = branch_or_current(&workspace, branch.as_deref())?;
             let restacked = workspace.move_branch(&branch, onto)?;
-            print(to_value(&restacked)?, describe_restack(&restacked));
-            note_follower_syncs(&workspace)?;
-            if !restacked.conflicts.is_empty() {
-                return Err("move stopped at a conflict".into());
-            }
+            finish_restack(&workspace, &branch, restacked, *no_resolve, &print)?;
         }
         Command::Push(line) => {
             let branch = branch_or_current(&workspace, line.branch.as_deref())?;
@@ -756,7 +799,62 @@ fn discover(directory: &Path) -> Result<Workspace> {
     Ok(workspace)
 }
 
-fn describe_restack(restacked: &Restacked) -> String {
+/// Reports a restack (or move) of `target`; on a conflict, starts git's rebase for the first one unless
+/// `no_resolve`, or if that isn't possible, explains how to finish by hand.
+fn finish_restack(
+    workspace: &Workspace,
+    target: &str,
+    restacked: Restacked,
+    no_resolve: bool,
+    print: &dyn Fn(Value, String),
+) -> Result<()> {
+    let Some(conflict) = restacked.conflicts.first().cloned() else {
+        print(to_value(&restacked)?, describe_restack(&restacked, true));
+        return note_follower_syncs(workspace);
+    };
+    if no_resolve {
+        print(to_value(&restacked)?, describe_restack(&restacked, true));
+        return Err("restack stopped at a conflict".into());
+    }
+    match workspace.resolve_conflict(target, &conflict) {
+        Ok(ResolveOutcome::Stopped { branch, paths }) => {
+            let human = format!(
+                "{}\n{}",
+                describe_restack(&restacked, false),
+                describe_stopped(&branch, &paths)
+            );
+            print(to_value(&restacked)?, human);
+            Err("restack stopped at a conflict".into())
+        }
+        Ok(ResolveOutcome::Finished(next)) => {
+            print(to_value(&restacked)?, describe_restack(&restacked, false));
+            finish_restack(workspace, target, next, no_resolve, print)
+        }
+        Err(
+            error @ (Error::DirtyWorktree { .. }
+            | Error::CheckedOutElsewhere { .. }
+            | Error::AlreadyResolving { .. }),
+        ) => {
+            let human = format!(
+                "{}\nCouldn't start resolving it here: {error}",
+                describe_restack(&restacked, true)
+            );
+            print(to_value(&restacked)?, human);
+            Err("restack stopped at a conflict".into())
+        }
+        Err(error) => Err(error.into()),
+    }
+}
+
+fn describe_stopped(branch: &str, paths: &[String]) -> String {
+    format!(
+        "Resolving {branch}: fix the conflicts in {}, `git add` them, then run `stack continue` (or `stack abort`)",
+        paths.join(", ")
+    )
+}
+
+/// Describes a restack; with `manual`, each conflict comes with the commands to finish it by hand.
+fn describe_restack(restacked: &Restacked, manual: bool) -> String {
     let mut lines: Vec<String> = restacked
         .moved
         .iter()
@@ -771,6 +869,9 @@ fn describe_restack(restacked: &Restacked) -> String {
         .collect();
     for conflict in &restacked.conflicts {
         lines.push(describe_conflict(conflict));
+        if !manual {
+            continue;
+        }
         lines.push(format!(
             "Left {} and the branches on it as they were. To finish:",
             conflict.branch
