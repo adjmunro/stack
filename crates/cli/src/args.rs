@@ -84,8 +84,8 @@ pub(crate) enum Command {
     },
     /// Move a branch onto a different parent, taking the branches on it along.
     Move {
-        /// Branch to move [default: current branch].
-        branch: Option<String>,
+        /// Branches to move (each onto the new parent, so they become siblings) [default: current branch].
+        branches: Vec<String>,
         /// Its new parent.
         #[arg(long)]
         onto: String,
@@ -201,6 +201,14 @@ pub(crate) enum Command {
         /// Where to cut, as COMMIT=NAME (e.g. `HEAD~2=feat/part-1`); repeatable.
         #[arg(required = true, value_parser = parse_point)]
         points: Vec<(String, String)>,
+    },
+    /// Line branches up into one stack, in the order given: each moves onto the one before it.
+    Chain {
+        #[arg(required = true, num_args = 2..)]
+        branches: Vec<String>,
+        /// On a conflict, print how to finish by hand instead of starting git's rebase for you.
+        #[arg(long)]
+        no_resolve: bool,
     },
     /// Revert the latest stack command.
     Undo {

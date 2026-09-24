@@ -169,13 +169,34 @@ fn run(cli: &Cli) -> Result<()> {
             }
         }
         Command::Move {
-            branch,
+            branches,
             onto,
             no_resolve,
         } => {
-            let branch = branch_or_current(&workspace, branch.as_deref())?;
-            let restacked = workspace.move_branch(&branch, onto)?;
-            finish_restack(&workspace, &branch, restacked, *no_resolve, &print)?;
+            let branches = if branches.is_empty() {
+                vec![branch_or_current(&workspace, None)?]
+            } else {
+                branches.clone()
+            };
+            let names: Vec<&str> = branches.iter().map(String::as_str).collect();
+            let restacked = workspace.move_branches(&names, onto)?;
+            let target = restacked
+                .conflicts
+                .first()
+                .map_or_else(|| branches[0].clone(), |conflict| conflict.branch.clone());
+            finish_restack(&workspace, &target, restacked, *no_resolve, &print)?;
+        }
+        Command::Chain {
+            branches,
+            no_resolve,
+        } => {
+            let names: Vec<&str> = branches.iter().map(String::as_str).collect();
+            let restacked = workspace.chain(&names)?;
+            let target = restacked
+                .conflicts
+                .first()
+                .map_or_else(|| branches[0].clone(), |conflict| conflict.branch.clone());
+            finish_restack(&workspace, &target, restacked, *no_resolve, &print)?;
         }
         Command::Push(line) => {
             let branch = branch_or_current(&workspace, line.branch.as_deref())?;

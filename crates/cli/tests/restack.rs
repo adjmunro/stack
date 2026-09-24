@@ -213,3 +213,25 @@ fn abort_stops_resolving() {
     assert!(stdout(&stack(&fixture, &["abort"])).starts_with("Stopped resolving feat/a"));
     assert!(!fixture.path().join(".git/rebase-merge").exists());
 }
+
+#[test]
+fn chain_and_multi_move() {
+    let fixture = advanced();
+    fixture.git(&["switch", "--quiet", "--create", "feat/x", "develop"]);
+    fixture.commit("x.txt", "x", "feat: x");
+
+    let chained = stdout(&stack(&fixture, &["chain", "feat/x", "feat/a"]));
+    assert!(
+        chained.starts_with("Restacked feat/a onto feat/x (1 commit)\n"),
+        "{chained}"
+    );
+
+    let moved = stdout(&stack(
+        &fixture,
+        &["move", "feat/a", "feat/b", "--onto", "develop"],
+    ));
+    assert!(
+        moved.contains("Restacked feat/b onto develop (1 commit)"),
+        "{moved}"
+    );
+}
