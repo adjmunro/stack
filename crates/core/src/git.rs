@@ -124,6 +124,12 @@ pub(crate) trait GitRepo: Send + Sync {
     /// `message` goes in the reflog of refs that have one (e.g. branches).
     fn update_refs(&self, updates: &[RefUpdate], message: &str) -> Result<(), Error>;
 
+    /// The commit `revision` names (`git rev-parse <revision>^{commit}`).
+    ///
+    /// # Errors
+    /// [`Error::UnknownRevision`] if it names no commit.
+    fn resolve_commit(&self, revision: &str) -> Result<String, Error>;
+
     /// A commit's tree, parents, and subject line.
     fn commit(&self, id: &str) -> Result<CommitInfo, Error>;
 
@@ -494,6 +500,20 @@ impl GitRepo for GixRepo {
     fn write_blob(&self, data: &[u8]) -> Result<String, Error> {
         let repo = self.repo.to_thread_local();
         Ok(repo.write_blob(data).map_err(Error::git)?.to_string())
+    }
+
+    fn resolve_commit(&self, revision: &str) -> Result<String, Error> {
+        let repo = self.repo.to_thread_local();
+        let unknown = || Error::UnknownRevision {
+            revision: revision.into(),
+        };
+        let id = repo.rev_parse_single(revision).map_err(|_| unknown())?;
+        let commit = id
+            .object()
+            .map_err(Error::git)?
+            .peel_to_commit()
+            .map_err(|_| unknown())?;
+        Ok(commit.id.to_string())
     }
 
     fn commit(&self, id: &str) -> Result<CommitInfo, Error> {

@@ -132,6 +132,23 @@ impl Journal {
         self.reapply(git, OperationKind::Redo, &target, updates)
     }
 
+    /// Runs `write` against the store, creating it if needed. For local state outside the op log (review marks).
+    pub(crate) fn with_store<T>(
+        &self,
+        write: impl FnOnce(&Store) -> Result<T, Error>,
+    ) -> Result<T, Error> {
+        let guard = self.store(true)?.expect("store created");
+        write(guard.as_ref().expect("store opened"))
+    }
+
+    /// Runs `query` against the store if it exists.
+    pub(crate) fn query<T>(
+        &self,
+        query: impl FnOnce(&Store) -> Result<T, Error>,
+    ) -> Result<Option<T>, Error> {
+        self.read(query)
+    }
+
     /// The most recent operations, newest first.
     pub(crate) fn recent(&self, limit: usize) -> Result<Vec<Operation>, Error> {
         let records = self.read(|store| store.recent(limit))?.unwrap_or_default();
@@ -373,6 +390,9 @@ mod tests {
         }
         fn commit(&self, id: &str) -> Result<crate::git::CommitInfo, Error> {
             self.inner.commit(id)
+        }
+        fn resolve_commit(&self, revision: &str) -> Result<String, Error> {
+            self.inner.resolve_commit(revision)
         }
         fn merge_trees(
             &self,

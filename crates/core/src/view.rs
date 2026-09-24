@@ -255,6 +255,34 @@ pub struct Archived {
     pub commit: String,
 }
 
+/// A personal note on a commit's change, kept across rebases until the change itself changes.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ReviewMark {
+    pub kind: MarkKind,
+    pub note: Option<String>,
+    /// Seconds since the epoch.
+    pub marked_at: i64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MarkKind {
+    /// Read and approved.
+    Reviewed,
+    /// Built and tested.
+    Tested,
+    /// Needs another look.
+    Flagged,
+}
+
+/// A commit with its review marks, for [`crate::Workspace::review`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct CommitReview {
+    pub commit: String,
+    pub summary: String,
+    pub marks: Vec<ReviewMark>,
+}
+
 /// The result of [`crate::Workspace::push`].
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Pushed {

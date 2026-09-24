@@ -9,11 +9,11 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use rusqlite::{Connection, params};
 
 use crate::git::RefUpdate;
-use crate::{Error, OperationKind, OperationState};
+use crate::{Error, MarkKind, OperationKind, OperationState, ReviewMark};
 
-const SCHEMA_VERSION: i64 = 2;
+const SCHEMA_VERSION: i64 = 3;
 
-const MIGRATIONS: [&str; 2] = [
+const MIGRATIONS: [&str; 3] = [
     r#"
     CREATE TABLE operation (
         id          INTEGER PRIMARY KEY,
@@ -36,6 +36,15 @@ const MIGRATIONS: [&str; 2] = [
     r#"
     ALTER TABLE operation ADD COLUMN checkout_from TEXT;
     ALTER TABLE operation ADD COLUMN checkout_to TEXT;
+"#,
+    r#"
+    CREATE TABLE review_mark (
+        key       TEXT    NOT NULL,
+        kind      TEXT    NOT NULL CHECK (kind IN ('reviewed', 'tested', 'flagged')),
+        note      TEXT,
+        marked_at INTEGER NOT NULL,
+        PRIMARY KEY (key, kind)
+    );
 "#,
 ];
 
@@ -235,6 +244,51 @@ impl Store {
         rows.collect::<Result<_, _>>().map_err(Error::store)
     }
 
+    /// Sets a review mark on `key`, replacing any of the same kind.
+    pub(crate) fn set_mark(
+        &self,
+        key: &str,
+        kind: MarkKind,
+        note: Option<&str>,
+    ) -> Result<(), Error> {
+        self.connection
+            .execute(
+                "INSERT OR REPLACE INTO review_mark (key, kind, note, marked_at) VALUES (?1, ?2, ?3, ?4)",
+                params![key, mark_kind_name(kind), note, now()],
+            )
+            .map(|_| ())
+            .map_err(Error::store)
+    }
+
+    /// Removes `key`'s marks of `kind`, or all of them. Returns how many were removed.
+    pub(crate) fn clear_marks(&self, key: &str, kind: Option<MarkKind>) -> Result<usize, Error> {
+        let kind = kind.map(mark_kind_name);
+        self.connection
+            .execute(
+                "DELETE FROM review_mark WHERE key = ?1 AND (?2 IS NULL OR kind = ?2)",
+                params![key, kind],
+            )
+            .map_err(Error::store)
+    }
+
+    /// `key`'s marks, ordered by kind.
+    pub(crate) fn marks(&self, key: &str) -> Result<Vec<ReviewMark>, Error> {
+        let mut statement = self
+            .connection
+            .prepare("SELECT kind, note, marked_at FROM review_mark WHERE key = ?1 ORDER BY kind")
+            .map_err(Error::store)?;
+        let rows = statement
+            .query_map(params![key], |row| {
+                Ok(ReviewMark {
+                    kind: parse_mark_kind(&row.get::<_, String>(0)?),
+                    note: row.get(1)?,
+                    marked_at: row.get(2)?,
+                })
+            })
+            .map_err(Error::store)?;
+        rows.collect::<Result<_, _>>().map_err(Error::store)
+    }
+
     #[cfg(test)]
     pub(crate) fn state(&self, id: i64) -> Result<Option<OperationState>, Error> {
         use rusqlite::OptionalExtension;
@@ -247,6 +301,22 @@ impl Store {
             .optional()
             .map(|state| state.map(|state| parse_state(&state)))
             .map_err(Error::store)
+    }
+}
+
+fn mark_kind_name(kind: MarkKind) -> &'static str {
+    match kind {
+        MarkKind::Reviewed => "reviewed",
+        MarkKind::Tested => "tested",
+        MarkKind::Flagged => "flagged",
+    }
+}
+
+fn parse_mark_kind(name: &str) -> MarkKind {
+    match name {
+        "tested" => MarkKind::Tested,
+        "flagged" => MarkKind::Flagged,
+        _ => MarkKind::Reviewed,
     }
 }
 

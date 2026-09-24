@@ -102,6 +102,9 @@ pub enum Error {
     #[error("{name} has branches on it: {}; move or archive them first", children.join(", "))]
     HasChildren { name: String, children: Vec<String> },
 
+    #[error("no such commit: {revision}")]
+    UnknownRevision { revision: String },
+
     #[error("{name} is already archived")]
     AlreadyArchived { name: String },
 
