@@ -137,6 +137,17 @@ pub enum Error {
     #[error("{0}")]
     Forge(String),
 
+    /// The rebase started to resolve a conflict still has conflicts in `paths`.
+    #[error("resolve the conflicts in {} and `git add` them first", paths.join(", "))]
+    UnresolvedConflicts { paths: Vec<String> },
+
+    #[error("no restack is waiting to continue")]
+    NothingToContinue,
+
+    /// A restack is already waiting on `branch`'s conflict.
+    #[error("a restack is already waiting on {branch}; `stack continue` or `stack abort` it first")]
+    AlreadyResolving { branch: String },
+
     /// The op log (SQLite) failed.
     #[error("op log: {0}")]
     Store(BoxError),

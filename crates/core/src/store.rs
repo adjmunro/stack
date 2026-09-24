@@ -11,9 +11,9 @@ use rusqlite::{Connection, params};
 use crate::git::{Checkout, RefUpdate};
 use crate::{Error, MarkKind, OperationKind, OperationState, ReviewMark};
 
-const SCHEMA_VERSION: i64 = 4;
+const SCHEMA_VERSION: i64 = 5;
 
-const MIGRATIONS: [&str; 4] = [
+const MIGRATIONS: [&str; 5] = [
     r#"
     CREATE TABLE operation (
         id          INTEGER PRIMARY KEY,
@@ -51,6 +51,12 @@ const MIGRATIONS: [&str; 4] = [
     CREATE TABLE follower (
         worktree TEXT PRIMARY KEY,
         branch   TEXT NOT NULL
+    );
+"#,
+    r#"
+    CREATE TABLE state (
+        key   TEXT PRIMARY KEY,
+        value TEXT NOT NULL
     );
 "#,
 ];
@@ -258,6 +264,32 @@ impl Store {
             })
             .map_err(Error::store)?;
         rows.collect::<Result<_, _>>().map_err(Error::store)
+    }
+
+    /// Sets (or with `None`, clears) a piece of persistent state, such as a restack waiting on `stack continue`.
+    pub(crate) fn set_state(&self, key: &str, value: Option<&str>) -> Result<(), Error> {
+        let result = match value {
+            Some(value) => self.connection.execute(
+                "INSERT OR REPLACE INTO state (key, value) VALUES (?1, ?2)",
+                params![key, value],
+            ),
+            None => self
+                .connection
+                .execute("DELETE FROM state WHERE key = ?1", params![key]),
+        };
+        result.map(|_| ()).map_err(Error::store)
+    }
+
+    pub(crate) fn state_value(&self, key: &str) -> Result<Option<String>, Error> {
+        use rusqlite::OptionalExtension;
+        self.connection
+            .query_row(
+                "SELECT value FROM state WHERE key = ?1",
+                params![key],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(Error::store)
     }
 
     /// Records that the worktree at `worktree` follows `branch`, replacing what it followed before.

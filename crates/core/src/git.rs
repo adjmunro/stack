@@ -246,6 +246,25 @@ pub(crate) trait GitRepo: Send + Sync {
     /// read the repository's. `None` ends the quarantine. The in-process library is unaffected.
     fn quarantine(&self, objects: Option<&Path>);
 
+    /// Runs `git rebase --onto <onto> <upstream> <branch>` (checking `branch` out). Returns whether it finished;
+    /// `false` if it stopped at a conflict for the user to resolve.
+    fn rebase(&self, onto: &str, upstream: &str, branch: &str) -> Result<bool, Error>;
+
+    /// Whether a `git rebase` is in progress in this worktree.
+    fn rebase_in_progress(&self) -> Result<bool, Error>;
+
+    /// Runs `git rebase --continue`, keeping each commit's message. Returns whether the rebase finished; `false` if
+    /// it stopped at a later commit's conflict.
+    ///
+    /// # Errors
+    /// [`Error::UnresolvedConflicts`] if the current conflict isn't resolved yet.
+    fn rebase_continue(&self) -> Result<bool, Error>;
+
+    fn rebase_abort(&self) -> Result<(), Error>;
+
+    /// Paths with unresolved conflicts in this worktree's index.
+    fn unmerged_paths(&self) -> Result<Vec<String>, Error>;
+
     /// Makes `remote`/`branch` the upstream of local `branch`.
     fn set_upstream(&self, branch: &str, remote: &str) -> Result<(), Error>;
 
@@ -973,6 +992,83 @@ impl GitRepo for GixRepo {
             args.push("--all");
         }
         run_ok(&mut self.git(&args), message.as_bytes()).map(|_| ())
+    }
+
+    fn rebase(&self, onto: &str, upstream: &str, branch: &str) -> Result<bool, Error> {
+        let mut command = self.git(&[
+            "-c",
+            "core.editor=true",
+            "rebase",
+            "--quiet",
+            "--onto",
+            onto,
+            upstream,
+            branch,
+        ]);
+        let output = run(&mut command, b"")?;
+        if output.status.success() {
+            Ok(true)
+        } else if self.rebase_in_progress()? {
+            Ok(false)
+        } else {
+            Err(command_error(&command, &output))
+        }
+    }
+
+    fn rebase_in_progress(&self) -> Result<bool, Error> {
+        for state in ["rebase-merge", "rebase-apply"] {
+            let path = run_ok(
+                &mut self.git(&["rev-parse", "--path-format=absolute", "--git-path", state]),
+                b"",
+            )?;
+            if Path::new(String::from_utf8_lossy(&path).trim()).exists() {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
+    fn rebase_continue(&self) -> Result<bool, Error> {
+        let stopped_at = || -> Result<Option<String>, Error> {
+            let output = run(
+                &mut self.git(&["rev-parse", "--verify", "--quiet", "REBASE_HEAD"]),
+                b"",
+            )?;
+            Ok(output
+                .status
+                .success()
+                .then(|| String::from_utf8_lossy(&output.stdout).trim().to_owned()))
+        };
+        let before = stopped_at()?;
+        let mut command = self.git(&["-c", "core.editor=true", "rebase", "--continue"]);
+        let output = run(&mut command, b"")?;
+        if output.status.success() {
+            return Ok(true);
+        }
+        if !self.rebase_in_progress()? {
+            return Err(command_error(&command, &output));
+        }
+        if stopped_at()? == before {
+            return Err(Error::UnresolvedConflicts {
+                paths: self.unmerged_paths()?,
+            });
+        }
+        Ok(false)
+    }
+
+    fn unmerged_paths(&self) -> Result<Vec<String>, Error> {
+        let unmerged = run_ok(
+            &mut self.git(&["diff", "--name-only", "--diff-filter=U"]),
+            b"",
+        )?;
+        Ok(String::from_utf8_lossy(&unmerged)
+            .lines()
+            .map(str::to_owned)
+            .collect())
+    }
+
+    fn rebase_abort(&self) -> Result<(), Error> {
+        run_ok(&mut self.git(&["rebase", "--abort"]), b"").map(|_| ())
     }
 
     fn quarantine(&self, objects: Option<&Path>) {

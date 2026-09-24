@@ -501,6 +501,21 @@ mod tests {
         fn quarantine(&self, objects: Option<&Path>) {
             self.inner.quarantine(objects)
         }
+        fn rebase(&self, onto: &str, upstream: &str, branch: &str) -> Result<bool, Error> {
+            self.inner.rebase(onto, upstream, branch)
+        }
+        fn rebase_in_progress(&self) -> Result<bool, Error> {
+            self.inner.rebase_in_progress()
+        }
+        fn rebase_continue(&self) -> Result<bool, Error> {
+            self.inner.rebase_continue()
+        }
+        fn rebase_abort(&self) -> Result<(), Error> {
+            self.inner.rebase_abort()
+        }
+        fn unmerged_paths(&self) -> Result<Vec<String>, Error> {
+            self.inner.unmerged_paths()
+        }
         fn switch(&self, branch: &str, create: bool) -> Result<(), Error> {
             self.inner.switch(branch, create)
         }
