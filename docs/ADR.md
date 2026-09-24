@@ -195,3 +195,9 @@
 - Detail: `stack amend --into <commit>` takes the staged tree, merges its difference from HEAD into the target commit (`merge-tree` over HEAD's tree), rewrites the target, replays the rest of its branch, and restacks everything leafward of that branch, including the current one. Refused, with nothing changed, on any conflict.
 - Detail: The journal's checkout step can be index-only: the index moves to the new tip (`git read-tree`) and the working tree is left alone. Recovery, undo, and redo move only the index too, restoring the staged tree exactly.
 - Reason: Editing an earlier commit without an interactive rebase, and without disturbing unstaged work, is the base for `absorb`.
+
+2026-09-24T14:02Z@df07a9ba
+- Category: absorb
+- Detail: `stack absorb` splits `git diff --cached -U0` into hunks and blames each hunk's old lines at HEAD. A hunk whose lines all come from one commit of the current stack goes to that commit; pure additions, mixed-origin lines, and lines from outside the stack stay staged.
+- Detail: Each target commit gets one amend (see "amend"), nearest HEAD first so older targets keep their ids. Each change is built by applying that target's hunks to the original HEAD tree in a throwaway index, and merged into the target over the original HEAD tree, so earlier absorbs can't shift later hunks' line numbers. Leftovers are merged onto the new HEAD and re-staged.
+- Reason: Conservative targeting (blame, one owner) never guesses; anything uncertain is left exactly where it was.

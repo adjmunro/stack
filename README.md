@@ -32,7 +32,7 @@ stack sync                        # after they merge: fast-forward develop, arch
 |---|---|
 | Set up | `init`, `trunk add/remove`, `import graphite` |
 | See | `tree [--check] [-- <paths>]`, `status`, `check`, `delta <a> [b]`, `review`, `lost` |
-| Rewrite | `restack`, `move <branches…> --onto`, `chain`, `split`, `continue`, `abort`, `sync` |
+| Rewrite | `restack`, `move <branches…> --onto`, `chain`, `split`, `amend --into`, `absorb`, `continue`, `abort`, `sync` |
 | Share | `push`, `pr` (both take `--rootward`, `--leafward`, `--all`) |
 | Move around | `up`, `down`, `top`, `bottom`, `create` |
 | Tidy | `archive`, `unarchive`, `archived`, `pin`, `unpin` |
