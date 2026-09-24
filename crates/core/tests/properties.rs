@@ -156,7 +156,10 @@ proptest! {
 
 /// Up to five branches whose commits each either touch their own file or a shared one; then 1–2 trunk commits
 /// that may touch the shared file too. Shared-file commits conflict with whatever changed it before them.
-fn clashing_stacks() -> impl Strategy<Value = (Vec<(Option<usize>, Vec<bool>)>, Vec<bool>)> {
+/// Each branch's parent and, per commit, whether it touches the shared file; then the same for trunk commits.
+type Clashing = (Vec<(Option<usize>, Vec<bool>)>, Vec<bool>);
+
+fn clashing_stacks() -> impl Strategy<Value = Clashing> {
     (1..=5usize).prop_flat_map(|count| {
         let branches: Vec<_> = (0..count)
             .map(|index| {
