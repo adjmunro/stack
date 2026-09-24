@@ -8,8 +8,8 @@ use clap::{Parser, Subcommand};
 use serde_json::{Value, to_value};
 use stack_core::{
     Conflict, Direction, Error, Head, Marked, Node, Operation, OperationState, Outcome,
-    PushOutcome, Pushed, RecoveryOutcome, RestackPreview, Restacked, Role, Scope, Source, Tree,
-    Workspace,
+    PushOutcome, Pushed, RecoveryOutcome, RestackPreview, Restacked, Role, Scope, Source, Step,
+    Tree, Workspace,
 };
 
 type Result<T, E = Box<dyn std::error::Error>> = std::result::Result<T, E>;
@@ -94,6 +94,32 @@ enum Command {
         /// Remote to push to [default: the branch's upstream remote, else origin, else the only remote].
         #[arg(long)]
         remote: Option<String>,
+    },
+    /// Check out the branch stacked on this one.
+    Up {
+        /// How many branches to go up.
+        #[arg(default_value_t = 1)]
+        steps: usize,
+    },
+    /// Check out this branch's parent.
+    Down {
+        /// How many branches to go down.
+        #[arg(default_value_t = 1)]
+        steps: usize,
+    },
+    /// Check out the top of this stack.
+    Top,
+    /// Check out the first branch of this stack.
+    Bottom,
+    /// Create a branch on the current one and check it out; commit too with --message.
+    Create {
+        name: String,
+        /// Commit the staged changes with this message.
+        #[arg(short, long)]
+        message: Option<String>,
+        /// Stage changes to tracked files before committing.
+        #[arg(short, long, requires = "message")]
+        all: bool,
     },
     /// Revert the latest stack command.
     Undo,
@@ -240,6 +266,17 @@ fn run(cli: &Cli) -> Result<()> {
                 return Err("some branches were rejected; fetch, restack, and push again".into());
             }
         }
+        Command::Up { steps } => navigate(&workspace, Step::Up(*steps), &print)?,
+        Command::Down { steps } => navigate(&workspace, Step::Down(*steps), &print)?,
+        Command::Top => navigate(&workspace, Step::Top, &print)?,
+        Command::Bottom => navigate(&workspace, Step::Bottom, &print)?,
+        Command::Create { name, message, all } => {
+            workspace.create(name, message.as_deref(), *all)?;
+            print(
+                serde_json::json!({ "created": name }),
+                format!("Created {name}"),
+            );
+        }
         Command::Undo => {
             let undone = workspace.undo()?;
             print(
@@ -344,6 +381,25 @@ fn describe_preview(preview: &RestackPreview) -> String {
         lines.push("Everything is up to date.".to_owned());
     }
     lines.join("\n")
+}
+
+/// Steps from the current branch and checks out where it lands.
+fn navigate(workspace: &Workspace, step: Step, print: &dyn Fn(Value, String)) -> Result<()> {
+    let current = branch_or_current(workspace, None)?;
+    let target = workspace.step(&current, step)?;
+    if target == current {
+        print(
+            serde_json::json!({ "branch": target }),
+            format!("Already on {target}"),
+        );
+    } else {
+        workspace.switch(&target)?;
+        print(
+            serde_json::json!({ "branch": target }),
+            format!("Switched to {target}"),
+        );
+    }
+    Ok(())
 }
 
 fn describe_push(pushed: &Pushed) -> String {
