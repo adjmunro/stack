@@ -23,7 +23,6 @@ You should remove bullets point when they are or become complete and fully imple
 - LLM generated messages & smart squash message rewrites
 - Commit header linter / customisable rules
 - Easier git hooks for toolchain checks
-- Swap between parallel branches and serial stacks
 - When resolving conflicts, click & drag to include a selected hunk instead of / as well as whole hunk and individual line options
 - Import filtering for diffs (Or some kind of “in `*.kt` ignore lines that start with `import *`)
 - Indexer / find usages, implementation, declaration, injection etc
