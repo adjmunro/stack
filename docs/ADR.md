@@ -183,3 +183,9 @@
 - Detail: On a conflict, `stack restack`/`move` (unless `--no-resolve`) runs `git rebase --onto <parent> <offshoot> <branch>` for the first conflicting branch, if the worktree is clean and the branch isn't checked out elsewhere, and records the restack in the store. `stack continue` runs `git rebase --continue` (message kept) if needed, then restacks the target again; `stack abort` runs `git rebase --abort`.
 - Detail: The rebase is git's, not journalled; `git reflog` covers it. The restacks before and after are journalled as usual.
 - Reason: git's rebase gives the conflict UI people and IDEs already know, instead of a second, partial one in `stack`.
+
+2026-09-24T13:10Z@3852be47
+- Category: sync
+- Detail: `stack sync` fetches (`git fetch --prune`), fast-forwards each root trunk to its remote copy (never merges or resets; ahead or diverged trunks are reported and left), then finds merged branches: tip in the trunk (merge commit or fast-forward, provided the branch ever had commits of its own per its reflog), every own commit's patch-id in the trunk (rebase), or the whole change's patch-id matching one trunk commit (squash).
+- Detail: Branches on merged ones are moved to the nearest unmerged branch or trunk below (a move keeps their own offshoot, so only their commits replay); merged branches are archived, not deleted; then every trunk is restacked. Each step is its own journalled command.
+- Reason: Archiving keeps merged work recoverable, and patch-id matching covers GitHub's squash and rebase merges without asking the forge.

@@ -18,6 +18,8 @@ Canonical vocabulary for the project. Prefer these names in code, schema, and do
 - **Restack**: rebase a branch and everything leafward of it, through limbs, onto its parent's current tip.
 - **Move**: re-parent a branch: replay its own commits onto a new parent, then restack its descendants.
 - **Continue / abort**: finish or give up a restack waiting at a conflict that git's rebase stopped on.
+- **Sync**: fetch, fast-forward trunks, archive branches merged into them (rehoming what's on them), and restack.
+- **Merged branch**: one whose work is in its trunk, by merge, rebase, or squash.
 - **Archive**: put a branch away under `refs/stack/archive/`: out of `git branch` and every `stack` view, kept safe from `gc`, restorable.
 - **Follower**: a worktree detached at a branch that's checked out elsewhere, kept at its tip by `stack`. Read-only in spirit: its own commits reach the branch by landing.
 - **Holder**: the worktree that has a branch checked out.
