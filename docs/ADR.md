@@ -152,3 +152,9 @@
 - Detail: `land` fast-forwards the branch to the follower's `HEAD` in one journalled transaction, moving the holder worktree's files first (`git read-tree -m -u`, which carries non-clashing local changes and refuses clashing ones). Refused unless the follower's commits sit on the branch's current tip.
 - Detail: The journal records which worktree a checkout moved, so recovery moves that one back.
 - Reason: The main workspace keeps its checkout (no detached HEAD in the IDE) while other worktrees borrow the branch to commit; the fast-forward check guarantees the follower built on exactly what the holder has.
+
+2026-09-24T08:31Z@988f77c4
+- Category: adaptors
+- Detail: `stack import graphite` reads `.git/.graphite_repo_config` (`trunk` or `trunks`) and `refs/branch-metadata/*` (`parentBranchName`, `parentBranchRevision`), writing trunks and unpinned parent records in one journalled command. Graphite's data is never modified; parents `stack` already records are kept.
+- Detail: The offshoot is Graphite's `parentBranchRevision` if the branch still contains it, else the merge base.
+- Reason: Unpinned records let the commit graph override Graphite where its tracking has drifted, which is the problem that motivated auto-tracking.
