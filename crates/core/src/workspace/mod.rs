@@ -10,10 +10,10 @@ use crate::metadata::{self, Link, Mark, Metadata};
 use crate::resolve::Resolution;
 use crate::restack::Mode;
 use crate::{
-    Archived, CommitReview, Error, FollowPosition, FollowerSync, Following, Head, Landed,
-    LostCommit, MarkKind, Moved, Operation, OperationKind, Outcome, Parent, PreviewedMove,
-    PushOutcome, Pushed, PushedBranch, Recovered, RestackPreview, Restacked, Role, Scope, Status,
-    Step, SyncOutcome, Tree, Worktree,
+    Archived, CommitReview, Error, FollowPosition, FollowerSync, Following, Head, Imported,
+    ImportedParent, Landed, LostCommit, MarkKind, Moved, Operation, OperationKind, Outcome, Parent,
+    PreviewedMove, PushOutcome, Pushed, PushedBranch, Recovered, RestackPreview, Restacked, Role,
+    Scope, Skipped, Status, Step, SyncOutcome, Tree, Worktree,
 };
 
 /// Entry point for all `stack` operations on one repository.
@@ -59,6 +59,7 @@ pub struct Pinned {
 }
 
 mod archive;
+mod import;
 mod lost;
 mod navigate;
 mod push;

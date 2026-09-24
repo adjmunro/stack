@@ -364,6 +364,41 @@ pub struct LostCommit {
     pub seen_at: i64,
 }
 
+/// The result of an import such as [`crate::Workspace::import_graphite`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct Imported {
+    pub outcome: Outcome,
+    /// Branches newly marked as trunks.
+    pub trunks: Vec<String>,
+    /// Parents newly recorded.
+    pub parents: Vec<ImportedParent>,
+    pub skipped: Vec<Skipped>,
+}
+
+impl Default for Imported {
+    fn default() -> Self {
+        Self {
+            outcome: Outcome::Unchanged,
+            trunks: Vec::new(),
+            parents: Vec::new(),
+            skipped: Vec::new(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ImportedParent {
+    pub branch: String,
+    pub parent: String,
+}
+
+/// Something an import left out, and why.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct Skipped {
+    pub branch: String,
+    pub reason: String,
+}
+
 /// The result of [`crate::Workspace::push`].
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Pushed {
