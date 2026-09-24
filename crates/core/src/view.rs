@@ -351,6 +351,19 @@ pub struct Landed {
     pub holder: Option<std::path::PathBuf>,
 }
 
+/// A commit you've been on that no ref reaches any more, from [`crate::Workspace::lost`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct LostCommit {
+    pub commit: String,
+    pub summary: String,
+    /// The ref whose reflog last saw it, e.g. `refs/heads/feat/a`, or `HEAD` if no branch did at that moment.
+    pub seen_on: String,
+    /// The reflog message of that sighting, e.g. `commit (amend): …` or `reset: moving to …`.
+    pub how: String,
+    /// Seconds since the epoch.
+    pub seen_at: i64,
+}
+
 /// The result of [`crate::Workspace::push`].
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Pushed {

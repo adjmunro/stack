@@ -405,8 +405,12 @@ mod tests {
         fn merge_base(&self, one: &str, two: &str) -> Result<Option<String>, Error> {
             self.inner.merge_base(one, two)
         }
-        fn commits_excluding(&self, tip: &str, hidden: &[String]) -> Result<Vec<String>, Error> {
-            self.inner.commits_excluding(tip, hidden)
+        fn reachable_excluding(
+            &self,
+            tips: &[String],
+            hidden: &[String],
+        ) -> Result<Vec<String>, Error> {
+            self.inner.reachable_excluding(tips, hidden)
         }
         fn patch_ids(
             &self,
@@ -419,6 +423,12 @@ mod tests {
         }
         fn refs(&self, prefix: &str) -> Result<Vec<(String, String)>, Error> {
             self.inner.refs(prefix)
+        }
+        fn reflog(&self, reference: &str) -> Result<Vec<crate::git::ReflogEntry>, Error> {
+            self.inner.reflog(reference)
+        }
+        fn commit_tips(&self) -> Result<Vec<String>, Error> {
+            self.inner.commit_tips()
         }
         fn write_blob(&self, data: &[u8]) -> Result<String, Error> {
             self.inner.write_blob(data)

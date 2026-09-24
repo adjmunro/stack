@@ -17,9 +17,9 @@ mod workspace;
 pub use error::Error;
 pub use view::{
     Archived, CommitReview, Conflict, Direction, FollowPosition, FollowerSync, Following, Head,
-    Landed, MarkKind, Moved, Node, Operation, OperationKind, OperationState, Outcome, Parent,
-    PreviewedMove, PushOutcome, Pushed, PushedBranch, Recovered, RecoveryOutcome, RefChange,
-    RestackPreview, Restacked, ReviewMark, Role, Scope, Source, Status, Step, SyncOutcome, Tree,
-    Worktree,
+    Landed, LostCommit, MarkKind, Moved, Node, Operation, OperationKind, OperationState, Outcome,
+    Parent, PreviewedMove, PushOutcome, Pushed, PushedBranch, Recovered, RecoveryOutcome,
+    RefChange, RestackPreview, Restacked, ReviewMark, Role, Scope, Source, Status, Step,
+    SyncOutcome, Tree, Worktree,
 };
 pub use workspace::{Environment, Marked, Pinned, Workspace};

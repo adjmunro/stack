@@ -30,6 +30,16 @@ pub(crate) struct FormerTip {
     pub left_by: String,
 }
 
+/// One reflog line.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ReflogEntry {
+    pub old: String,
+    pub new: String,
+    pub message: String,
+    /// Seconds since the epoch.
+    pub time: i64,
+}
+
 /// A worktree as `git worktree list` reports it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct WorktreeInfo {
@@ -124,11 +134,23 @@ pub(crate) trait GitRepo: Send + Sync {
     }
 
     /// Commits reachable from `tip` but not from any of `hidden` (`git rev-list tip --not hidden...`).
-    fn commits_excluding(&self, tip: &str, hidden: &[String]) -> Result<Vec<String>, Error>;
+    fn commits_excluding(&self, tip: &str, hidden: &[String]) -> Result<Vec<String>, Error> {
+        self.reachable_excluding(std::slice::from_ref(&tip.to_owned()), hidden)
+    }
+
+    /// Commits reachable from any of `tips` but not from any of `hidden`, in one walk.
+    fn reachable_excluding(&self, tips: &[String], hidden: &[String])
+    -> Result<Vec<String>, Error>;
 
     /// The stable `git patch-id` of each commit's diff against its first parent, keyed by commit. Merge commits and
     /// empty commits have none.
     fn patch_ids(&self, commits: &[String]) -> Result<HashMap<String, String>, Error>;
+
+    /// The reflog of `reference` (e.g. `HEAD`, `refs/heads/main`), oldest first; empty if it has none.
+    fn reflog(&self, reference: &str) -> Result<Vec<ReflogEntry>, Error>;
+
+    /// Every commit a ref (of any kind) points at, peeling tags. Refs to other objects are skipped.
+    fn commit_tips(&self) -> Result<Vec<String>, Error>;
 
     /// Every ref under `prefix` (which must end in `/`) with the object it points at, sorted by name.
     fn refs(&self, prefix: &str) -> Result<Vec<(String, String)>, Error>;
@@ -469,14 +491,22 @@ impl GitRepo for GixRepo {
         Ok(branches)
     }
 
-    fn commits_excluding(&self, tip: &str, hidden: &[String]) -> Result<Vec<String>, Error> {
+    fn reachable_excluding(
+        &self,
+        tips: &[String],
+        hidden: &[String],
+    ) -> Result<Vec<String>, Error> {
         let repo = self.repo.to_thread_local();
         let hidden = hidden
             .iter()
             .map(|id| object_id(id))
             .collect::<Result<Vec<_>, _>>()?;
+        let tips = tips
+            .iter()
+            .map(|id| object_id(id))
+            .collect::<Result<Vec<_>, _>>()?;
         let walk = repo
-            .rev_walk([object_id(tip)?])
+            .rev_walk(tips)
             .with_hidden(hidden)
             .all()
             .map_err(Error::git)?;
@@ -520,6 +550,53 @@ impl GitRepo for GixRepo {
             Err(gix::repository::merge_base::Error::NotFound { .. }) => Ok(None),
             Err(error) => Err(Error::git(error)),
         }
+    }
+
+    fn reflog(&self, reference: &str) -> Result<Vec<ReflogEntry>, Error> {
+        let repo = self.repo.to_thread_local();
+        let Some(reference) = repo
+            .try_find_reference(&full_name(reference)?)
+            .map_err(Error::git)?
+        else {
+            return Ok(Vec::new());
+        };
+        let mut entries = Vec::new();
+        if let Some(lines) = reference.log_iter().all().map_err(Error::git)? {
+            for line in lines {
+                let line = line.map_err(Error::git)?;
+                entries.push(ReflogEntry {
+                    old: line.previous_oid().to_string(),
+                    new: line.new_oid().to_string(),
+                    message: line.message.to_string(),
+                    time: line.signature.seconds(),
+                });
+            }
+        }
+        Ok(entries)
+    }
+
+    fn commit_tips(&self) -> Result<Vec<String>, Error> {
+        let repo = self.repo.to_thread_local();
+        let platform = repo.references().map_err(Error::git)?;
+        let mut tips = Vec::new();
+        for reference in platform.all().map_err(Error::git)? {
+            let Ok(mut reference) = reference else {
+                continue;
+            };
+            let Ok(id) = reference.peel_to_id() else {
+                continue;
+            };
+            if repo
+                .find_object(id)
+                .map(|object| object.kind == gix::object::Kind::Commit)
+                .unwrap_or(false)
+            {
+                tips.push(id.to_string());
+            }
+        }
+        tips.sort();
+        tips.dedup();
+        Ok(tips)
     }
 
     fn refs(&self, prefix: &str) -> Result<Vec<(String, String)>, Error> {
