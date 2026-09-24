@@ -32,13 +32,13 @@ stack sync                        # after they merge: fast-forward develop, arch
 |---|---|
 | Set up | `init`, `trunk add/remove`, `import graphite` |
 | See | `tree [--check] [-- <paths>]`, `status`, `check`, `delta <a> [b]`, `review`, `lost` |
-| Rewrite | `restack`, `move --onto`, `continue`, `abort`, `sync` |
+| Rewrite | `restack`, `move <branches…> --onto`, `chain`, `split`, `continue`, `abort`, `sync` |
 | Share | `push`, `pr` (both take `--rootward`, `--leafward`, `--all`) |
 | Move around | `up`, `down`, `top`, `bottom`, `create` |
 | Tidy | `archive`, `unarchive`, `archived`, `pin`, `unpin` |
-| Review | `mark [--tested \| --flagged --note …]`, `unmark` |
+| Review | `mark [--tested \| --flagged --note …]`, `unmark`, `lint` |
 | Worktrees | `worktree add/list/sync`, `land` |
-| Safety | `undo`, `redo`, `oplog`, `guard install/uninstall/status` |
+| Safety | `undo [--to <id>]`, `redo`, `oplog`, `guard install/uninstall/status` |
 
 Every command takes `-C <path>` and `--json`. See `stack <command> --help`.
 
