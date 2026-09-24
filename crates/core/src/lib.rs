@@ -4,6 +4,7 @@
 //! serialisable view-models.
 
 mod error;
+mod forge;
 mod git;
 mod journal;
 mod line;
@@ -18,8 +19,8 @@ pub use error::Error;
 pub use view::{
     Archived, CommitReview, Conflict, Direction, FollowPosition, FollowerSync, Following, Head,
     Imported, ImportedParent, Landed, LostCommit, MarkKind, Moved, Node, Operation, OperationKind,
-    OperationState, Outcome, Parent, PreviewedMove, PushOutcome, Pushed, PushedBranch, Recovered,
-    RecoveryOutcome, RefChange, RestackPreview, Restacked, ReviewMark, Role, Scope, Skipped,
-    Source, Status, Step, SyncOutcome, Tree, Worktree,
+    OperationState, Outcome, Parent, PreviewedMove, ProposalAction, Proposed, ProposedBranch,
+    PushOutcome, Pushed, PushedBranch, Recovered, RecoveryOutcome, RefChange, RestackPreview,
+    Restacked, ReviewMark, Role, Scope, Skipped, Source, Status, Step, SyncOutcome, Tree, Worktree,
 };
 pub use workspace::{Environment, Marked, Pinned, Workspace};

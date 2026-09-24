@@ -399,6 +399,39 @@ pub struct Skipped {
     pub reason: String,
 }
 
+/// The result of [`crate::Workspace::propose`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct Proposed {
+    pub pushed: Pushed,
+    /// One entry per pushed branch, rootward first.
+    pub pull_requests: Vec<ProposedBranch>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ProposedBranch {
+    pub branch: String,
+    /// The branch it targets: its parent.
+    pub base: String,
+    pub number: Option<u64>,
+    pub url: Option<String>,
+    pub action: ProposalAction,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum ProposalAction {
+    Created,
+    /// An open pull request whose base was changed to the branch's current parent.
+    Retargeted {
+        from: String,
+    },
+    UpToDate,
+    /// Left alone, e.g. because its pull request is merged or closed, or its push was rejected.
+    Skipped {
+        reason: String,
+    },
+}
+
 /// The result of [`crate::Workspace::push`].
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Pushed {

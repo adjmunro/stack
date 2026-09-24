@@ -133,6 +133,10 @@ pub enum Error {
     #[error("a branch called {name} already exists")]
     BranchExists { name: String },
 
+    /// The code-review host (via `gh`) failed.
+    #[error("{0}")]
+    Forge(String),
+
     /// The op log (SQLite) failed.
     #[error("op log: {0}")]
     Store(BoxError),

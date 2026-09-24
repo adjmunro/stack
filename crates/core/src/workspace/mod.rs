@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 
 use serde::Serialize;
 
+use crate::forge::{Forge, GhForge, PullRequest};
 use crate::git::{Branch, Checkout, GitRepo, GixRepo, PushRef, RefUpdate};
 use crate::journal::Journal;
 use crate::metadata::{self, Link, Mark, Metadata};
@@ -12,8 +13,9 @@ use crate::restack::Mode;
 use crate::{
     Archived, CommitReview, Error, FollowPosition, FollowerSync, Following, Head, Imported,
     ImportedParent, Landed, LostCommit, MarkKind, Moved, Operation, OperationKind, Outcome, Parent,
-    PreviewedMove, PushOutcome, Pushed, PushedBranch, Recovered, RestackPreview, Restacked, Role,
-    Scope, Skipped, Status, Step, SyncOutcome, Tree, Worktree,
+    PreviewedMove, ProposalAction, Proposed, ProposedBranch, PushOutcome, Pushed, PushedBranch,
+    Recovered, RestackPreview, Restacked, Role, Scope, Skipped, Status, Step, SyncOutcome, Tree,
+    Worktree,
 };
 
 /// Entry point for all `stack` operations on one repository.
@@ -22,6 +24,7 @@ use crate::{
 /// changed concurrently) and journalled in the op log, so they can be undone and survive a crash part-way through.
 pub struct Workspace {
     git: Box<dyn GitRepo>,
+    forge: Box<dyn Forge>,
     journal: Journal,
     recovered: Vec<Recovered>,
 }
@@ -62,6 +65,7 @@ mod archive;
 mod import;
 mod lost;
 mod navigate;
+mod propose;
 mod push;
 mod restack;
 mod review;
@@ -82,11 +86,21 @@ impl Workspace {
     /// # Errors
     /// [`Error::NotARepository`] if no repository is found.
     pub fn discover_with(path: impl AsRef<Path>, environment: Environment) -> Result<Self, Error> {
-        let git = GixRepo::discover(path.as_ref(), environment)?;
+        let git = GixRepo::discover(path.as_ref(), environment.clone())?;
+        let current = git
+            .worktrees()?
+            .into_iter()
+            .find(|worktree| worktree.current);
+        let workdir = current.map_or_else(|| git.common_dir(), |worktree| worktree.path);
+        let forge = GhForge {
+            workdir,
+            environment,
+        };
         let journal = Journal::new(git.common_dir().join("stack").join("stack.db"));
         let recovered = journal.recover(&git)?;
         Ok(Self {
             git: Box::new(git),
+            forge: Box::new(forge),
             journal,
             recovered,
         })
