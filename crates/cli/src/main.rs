@@ -10,7 +10,8 @@ use stack_core::{
     CommitRange, CommitReview, Conflict, Direction, Error, FollowPosition, FollowerSync,
     GuardViolation, Head, MarkKind, Marked, Node, Operation, OperationState, Outcome,
     ProposalAction, ProposedBranch, PushOutcome, Pushed, RecoveryOutcome, ResolveOutcome,
-    RestackPreview, Restacked, Role, Scope, Source, Step, SyncOutcome, Tree, Workspace, Worktree,
+    RestackPreview, Restacked, Role, Scope, Source, Step, SyncOutcome, Synced, Tree, TrunkUpdate,
+    Workspace, Worktree,
 };
 
 type Result<T, E = Box<dyn std::error::Error>> = std::result::Result<T, E>;
@@ -75,6 +76,16 @@ enum Command {
         /// On a conflict, print how to finish by hand instead of starting git's rebase for you.
         #[arg(long)]
         no_resolve: bool,
+    },
+    /// Catch up after work lands: fetch, fast-forward trunks, archive merged branches (rehoming what's on them), and
+    /// restack.
+    Sync {
+        /// Remote to sync with [default: origin, else the only remote].
+        #[arg(long)]
+        remote: Option<String>,
+        /// Use what was last fetched instead of fetching.
+        #[arg(long)]
+        no_fetch: bool,
     },
     /// Carry on after resolving a restack conflict (and `git add`ing the files).
     Continue,
@@ -398,6 +409,14 @@ fn run(cli: &Cli) -> Result<()> {
             let branch = branch_or_current(&workspace, branch.as_deref())?;
             let restacked = workspace.restack(&branch)?;
             finish_restack(&workspace, &branch, restacked, *no_resolve, &print)?;
+        }
+        Command::Sync { remote, no_fetch } => {
+            let synced = workspace.sync(remote.as_deref(), !no_fetch)?;
+            print(to_value(&synced)?, describe_sync_all(&synced, !no_fetch));
+            note_follower_syncs(&workspace)?;
+            if !synced.conflicts.is_empty() {
+                return Err("sync stopped at a conflict".into());
+            }
         }
         Command::Continue => {
             let target = workspace.resolving()?.map(|waiting| waiting.target);
@@ -844,6 +863,58 @@ fn finish_restack(
         }
         Err(error) => Err(error.into()),
     }
+}
+
+fn describe_sync_all(synced: &Synced, fetched: bool) -> String {
+    let mut lines = Vec::new();
+    if let (Some(remote), true) = (&synced.remote, fetched) {
+        lines.push(format!("Fetched {remote}"));
+    }
+    let remote = synced.remote.as_deref().unwrap_or("the remote");
+    for trunk in &synced.trunks {
+        let name = &trunk.name;
+        match &trunk.outcome {
+            TrunkUpdate::FastForwarded { to, .. } => {
+                lines.push(format!(
+                    "Fast-forwarded {name} to {remote}/{name} ({})",
+                    short(to)
+                ));
+            }
+            TrunkUpdate::Ahead => lines.push(format!(
+                "{name} has commits {remote} doesn't; left as it is"
+            )),
+            TrunkUpdate::Diverged => lines.push(format!(
+                "{name} has diverged from {remote}/{name}; left as it is"
+            )),
+            TrunkUpdate::UpToDate | TrunkUpdate::NoUpstream => {}
+        }
+    }
+    let restack = Restacked {
+        outcome: Outcome::Unchanged,
+        moved: synced.moved.clone(),
+        conflicts: synced.conflicts.clone(),
+        blocked: synced.blocked.clone(),
+    };
+    let moves = describe_restack(&restack, true);
+    let nothing_moved = synced.moved.is_empty() && synced.conflicts.is_empty();
+    lines.extend(synced.archived.iter().map(|branch| {
+        format!("Archived merged {branch} (`stack unarchive {branch}` restores it)")
+    }));
+    lines.extend(
+        synced
+            .kept
+            .iter()
+            .map(|kept| format!("Kept merged {}: {}", kept.branch, kept.reason)),
+    );
+    if !nothing_moved {
+        lines.push(moves);
+    } else if synced.archived.is_empty()
+        && synced.kept.is_empty()
+        && !lines.iter().any(|line| line.starts_with("Fast-forwarded"))
+    {
+        lines.push("Everything is up to date.".to_owned());
+    }
+    lines.join("\n")
 }
 
 fn describe_stopped(branch: &str, paths: &[String]) -> String {

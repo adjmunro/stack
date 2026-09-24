@@ -110,3 +110,31 @@ fn pr_pushes_and_opens_pull_requests_via_gh() {
          Opened #2 for feat/b into feat/a: https://example.test/pull/2\n"
     );
 }
+
+#[test]
+fn sync_after_a_squash_merge() {
+    let (fixture, _remote) = repo();
+    fixture.git(&["push", "--quiet", "origin", "develop"]);
+    fixture.git(&["switch", "--quiet", "--detach", "develop"]);
+    fixture.git(&["merge", "--quiet", "--squash", "feat/a"]);
+    fixture.git(&["commit", "--quiet", "--message", "feat: a (#1)"]);
+    fixture.git(&["push", "--quiet", "origin", "HEAD:develop"]);
+    fixture.git(&["switch", "--quiet", "feat/b"]);
+
+    let output = stdout(&stack(&fixture, &["sync"]));
+
+    let develop = fixture.git(&["rev-parse", "--short=7", "develop"]);
+    assert_eq!(
+        output,
+        format!(
+            "Fetched origin\n\
+             Fast-forwarded develop to origin/develop ({develop})\n\
+             Archived merged feat/a (`stack unarchive feat/a` restores it)\n\
+             Restacked feat/b onto develop (1 commit)\n"
+        )
+    );
+    assert_eq!(
+        stdout(&stack(&fixture, &["sync"])),
+        "Fetched origin\nEverything is up to date.\n"
+    );
+}
