@@ -108,3 +108,20 @@ fn following_the_conflict_instructions_finishes_the_restack() {
     assert_eq!(log, "feat: b\nfeat: a");
     assert_eq!(fixture.git(&["show", "feat/b:a.txt"]), "resolved");
 }
+
+#[test]
+fn move_takes_descendants_along() {
+    let fixture = advanced();
+    fixture.git(&["switch", "--quiet", "--create", "feat/x", "develop"]);
+    fixture.commit("x.txt", "x", "feat: x");
+    fixture.git(&["switch", "--quiet", "feat/a"]);
+
+    assert_eq!(
+        stdout(&stack(&fixture, &["move", "--onto", "feat/x"])),
+        "Restacked feat/a onto feat/x (1 commit)\nRestacked feat/b onto feat/a (1 commit)\n"
+    );
+    assert_eq!(
+        stderr(&stack(&fixture, &["move", "feat/x", "--onto", "feat/b"])),
+        "error: feat/b is feat/x or stacked on it; that would create a cycle\n"
+    );
+}

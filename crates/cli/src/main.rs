@@ -64,6 +64,14 @@ enum Command {
         /// Branch to restack; a trunk restacks every stack on it [default: current branch].
         branch: Option<String>,
     },
+    /// Move a branch onto a different parent, taking the branches on it along.
+    Move {
+        /// Branch to move [default: current branch].
+        branch: Option<String>,
+        /// Its new parent.
+        #[arg(long)]
+        onto: String,
+    },
     /// Revert the latest stack command.
     Undo,
     /// Re-apply the most recently undone command.
@@ -162,6 +170,14 @@ fn run(cli: &Cli) -> Result<()> {
             print(to_value(&restacked)?, describe_restack(&restacked));
             if let Some(conflict) = &restacked.conflict {
                 return Err(format!("restack stopped at a conflict in {}", conflict.branch).into());
+            }
+        }
+        Command::Move { branch, onto } => {
+            let branch = branch_or_current(&workspace, branch.as_deref())?;
+            let restacked = workspace.move_branch(&branch, onto)?;
+            print(to_value(&restacked)?, describe_restack(&restacked));
+            if let Some(conflict) = &restacked.conflict {
+                return Err(format!("move stopped at a conflict in {}", conflict.branch).into());
             }
         }
         Command::Undo => {
