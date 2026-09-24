@@ -14,7 +14,6 @@ You should remove bullets point when they are or become complete and fully imple
 - Re-stacking, moving, absorbing (with interactive override / attribution), modify (specific commits, not just HEAD), multiple trunks
 - Reduce / filter commit tree by changes to specific file(s).
 - Passive conflict checks per branch or commit. And/or ahead-of-time resolution (e.g. when I make the branch, maybe I can see the conflict then and can decide/suggest the correct resolution now rather than later when it actually happens)
-- Archive branches.
 - Encrypt/Decrypt sensitive files w/ asymmetric keys?
 - Vertical vs horizontal tree view
 - “Choose neither” resolution

@@ -133,3 +133,9 @@
 - Detail: Remote: explicit, else the branch's upstream remote, else `origin`, else the only remote. Upstreams are set only for branches without one; pushing to a second remote (a backup) changes nothing locally.
 - Detail: A branch whose upstream has a different name is refused. Rejections (e.g. stale lease) are reported per branch and fail the command.
 - Reason: Leases make force-pushing restacked branches safe: a remote branch someone else changed since the last fetch is never overwritten.
+
+2026-09-24T08:05Z@84e11653
+- Category: archive
+- Detail: Archiving moves `refs/heads/<b>` to `refs/stack/archive/<b>` (a commit ref) in one journalled transaction. Refused for trunks, branches with branches on them, and checked-out branches.
+- Detail: Archived branches keep their recorded parent; restack's pruning skips them.
+- Reason: Leaving `refs/heads/` hides the branch from `git branch`, IDEs, and every `stack` view, while the archive ref keeps its commits from `gc`. The cost: like `git stash`, archived commits appear in `git log --all`.
