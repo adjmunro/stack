@@ -142,6 +142,9 @@ pub(crate) trait GitRepo: Send + Sync {
     fn reachable_excluding(&self, tips: &[String], hidden: &[String])
     -> Result<Vec<String>, Error>;
 
+    /// Whether any commit reachable from `tip` but not from `hidden` changes a path matching `paths` (git pathspecs).
+    fn touches(&self, tip: &str, hidden: &[String], paths: &[String]) -> Result<bool, Error>;
+
     /// The stable `git patch-id` of each commit's diff against its first parent, keyed by commit. Merge commits and
     /// empty commits have none.
     fn patch_ids(&self, commits: &[String]) -> Result<HashMap<String, String>, Error>;
@@ -518,6 +521,17 @@ impl GitRepo for GixRepo {
             .map_err(Error::git)?;
         walk.map(|info| Ok(info.map_err(Error::git)?.id.to_string()))
             .collect()
+    }
+
+    fn touches(&self, tip: &str, hidden: &[String], paths: &[String]) -> Result<bool, Error> {
+        let mut args: Vec<&str> = vec!["log", "-1", "--format=%H", tip];
+        if !hidden.is_empty() {
+            args.push("--not");
+            args.extend(hidden.iter().map(String::as_str));
+        }
+        args.push("--");
+        args.extend(paths.iter().map(String::as_str));
+        Ok(!run_ok(&mut self.git(&args), b"")?.is_empty())
     }
 
     fn patch_ids(&self, commits: &[String]) -> Result<HashMap<String, String>, Error> {

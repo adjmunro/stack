@@ -12,10 +12,10 @@ use crate::resolve::Resolution;
 use crate::restack::Mode;
 use crate::{
     Archived, CommitReview, Error, FollowPosition, FollowerSync, Following, GuardInstalled,
-    GuardViolation, Head, Imported, ImportedParent, Landed, LostCommit, MarkKind, Moved, Operation,
-    OperationKind, Outcome, Parent, PreviewedMove, ProposalAction, Proposed, ProposedBranch,
-    PushOutcome, Pushed, PushedBranch, Recovered, RestackPreview, Restacked, Role, Scope, Skipped,
-    Status, Step, SyncOutcome, Tree, Worktree,
+    GuardViolation, Head, Imported, ImportedParent, Landed, LostCommit, MarkKind, Moved, Node,
+    Operation, OperationKind, Outcome, Parent, PreviewedMove, ProposalAction, Proposed,
+    ProposedBranch, PushOutcome, Pushed, PushedBranch, Recovered, RestackPreview, Restacked, Role,
+    Scope, Skipped, Status, Step, SyncOutcome, Tree, Worktree,
 };
 
 /// Entry point for all `stack` operations on one repository.
@@ -193,6 +193,39 @@ impl Workspace {
     pub fn tree(&self) -> Result<Tree, Error> {
         let resolution = self.resolve()?.1;
         Ok(resolution.tree(self.current_branch()?.as_deref()))
+    }
+
+    /// [`Self::tree`] reduced to the branches whose own commits change any of `paths` (git pathspecs), plus the
+    /// branches rootward of them so the structure still reads. Trunks always stay.
+    pub fn tree_touching(&self, paths: &[String]) -> Result<Tree, Error> {
+        let resolution = self.resolve()?.1;
+        let mut touching = std::collections::BTreeSet::new();
+        for (name, entry) in &resolution.branches {
+            if entry.role == Role::Trunk {
+                continue;
+            }
+            let hidden: Vec<String> = entry
+                .parent
+                .iter()
+                .map(|parent| parent.offshoot.clone())
+                .collect();
+            if self.git.touches(&entry.tip, &hidden, paths)? {
+                touching.insert(name.clone());
+            }
+        }
+        let tree = resolution.tree(self.current_branch()?.as_deref());
+        let keep = |nodes: Vec<Node>| prune(nodes, &touching);
+        Ok(Tree {
+            trunks: tree
+                .trunks
+                .into_iter()
+                .map(|trunk| Node {
+                    children: keep(trunk.children),
+                    ..trunk
+                })
+                .collect(),
+            unattached: keep(tree.unattached),
+        })
     }
 
     /// Marks the existing branch `name` as a trunk. Its role is inferred: a limb if it is stacked on a regular
@@ -381,4 +414,15 @@ impl Workspace {
         )?;
         Ok(Outcome::Changed)
     }
+}
+
+/// Keeps the nodes in `keep`, and any node with a kept descendant.
+fn prune(nodes: Vec<Node>, keep: &std::collections::BTreeSet<String>) -> Vec<Node> {
+    nodes
+        .into_iter()
+        .filter_map(|node| {
+            let children = prune(node.children, keep);
+            (keep.contains(&node.name) || !children.is_empty()).then_some(Node { children, ..node })
+        })
+        .collect()
 }

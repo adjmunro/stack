@@ -418,6 +418,9 @@ mod tests {
         ) -> Result<std::collections::HashMap<String, String>, Error> {
             self.inner.patch_ids(commits)
         }
+        fn touches(&self, tip: &str, hidden: &[String], paths: &[String]) -> Result<bool, Error> {
+            self.inner.touches(tip, hidden, paths)
+        }
         fn blob_refs(&self, prefix: &str) -> Result<Vec<crate::git::BlobRef>, Error> {
             self.inner.blob_refs(prefix)
         }
