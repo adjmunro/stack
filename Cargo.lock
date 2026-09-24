@@ -2078,6 +2078,7 @@ version = "0.0.0"
 dependencies = [
  "gix",
  "proptest",
+ "regex",
  "rusqlite",
  "serde",
  "serde_json",

@@ -12,10 +12,11 @@ use crate::resolve::Resolution;
 use crate::restack::Mode;
 use crate::{
     Archived, CommitRange, CommitReview, Conflict, Delta, Error, FollowPosition, FollowerSync,
-    Following, GuardInstalled, GuardViolation, Head, Imported, ImportedParent, Landed, LostCommit,
-    MarkKind, Moved, Node, Operation, OperationKind, Outcome, Parent, PreviewedMove,
-    ProposalAction, Proposed, ProposedBranch, PushOutcome, Pushed, PushedBranch, Recovered,
-    RestackPreview, Restacked, Role, Scope, Skipped, Status, Step, SyncOutcome, Tree, Worktree,
+    Following, GuardInstalled, GuardViolation, Head, Imported, ImportedParent, Landed, LintFinding,
+    LintProblem, LintRules, LostCommit, MarkKind, Moved, Node, Operation, OperationKind, Outcome,
+    Parent, PreviewedMove, ProposalAction, Proposed, ProposedBranch, PushOutcome, Pushed,
+    PushedBranch, Recovered, RestackPreview, Restacked, Role, Scope, Skipped, Status, Step,
+    SyncOutcome, Tree, Worktree,
 };
 
 /// Entry point for all `stack` operations on one repository.
@@ -65,6 +66,7 @@ mod archive;
 mod delta;
 mod guard;
 mod import;
+mod lint;
 mod lost;
 mod navigate;
 mod propose;

@@ -127,6 +127,10 @@ pub enum Error {
     #[error("{revision} isn't one of {branch}'s own commits below its tip")]
     NotOwnCommit { branch: String, revision: String },
 
+    /// A lint rule in git config doesn't parse.
+    #[error("invalid lint rule: {rule}")]
+    InvalidLintRule { rule: String },
+
     #[error("{name} is already archived")]
     AlreadyArchived { name: String },
 

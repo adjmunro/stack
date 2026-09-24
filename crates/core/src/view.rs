@@ -470,6 +470,30 @@ pub struct CommitRange {
     pub tip: String,
 }
 
+/// What commit subjects must look like, for [`crate::Workspace::lint`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct LintRules {
+    /// A regex subjects must match.
+    pub pattern: String,
+    /// The longest subject allowed, in characters.
+    pub max_length: usize,
+}
+
+/// A commit whose subject breaks the rules.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct LintFinding {
+    pub commit: String,
+    pub summary: String,
+    pub problems: Vec<LintProblem>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum LintProblem {
+    TooLong { length: usize, max: usize },
+    NoMatch { pattern: String },
+}
+
 /// The result of [`crate::Workspace::push`].
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Pushed {
