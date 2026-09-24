@@ -208,9 +208,13 @@ impl<'a> Resolver<'a> {
                 }
                 latest = Some(self.later(latest, version.clone())?);
             }
-            if let Some(version) = latest {
-                candidates.push((other, version));
+            let Some(version) = latest else { continue };
+            // A branch built on this one (e.g. the long branch that was split to create it) is never its parent,
+            // even if it once pointed where this one now does.
+            if other.tip != branch.tip && self.git.is_ancestor(&branch.tip, &other.tip)? {
+                continue;
             }
+            candidates.push((other, version));
         }
         let mut nearest: Vec<&(&Branch, String)> = Vec::new();
         for candidate in &candidates {
@@ -397,12 +401,13 @@ fn age(branch: &Branch) -> (i64, &str) {
     (branch.created.unwrap_or(i64::MIN), &branch.name)
 }
 
-/// Replaces recorded parents that form cycles with derived ones (which can't: each derived parent is an ancestor, or
-/// an older branch on the same commit). Unpinned records go first.
+/// Breaks every cycle: first by replacing a recorded parent (unpinned first) with the derived one, and if a cycle is
+/// made only of derived parents, by detaching one member so it shows as unattached rather than looping.
 fn break_cycles(
     resolved: &mut BTreeMap<String, Resolved>,
     derived: &BTreeMap<String, Option<Parent>>,
 ) {
+    let mut replaced: BTreeSet<String> = BTreeSet::new();
     while let Some(cycle) = find_cycle(resolved) {
         let pinned = |name: &String| {
             resolved[name]
@@ -410,11 +415,20 @@ fn break_cycles(
                 .as_ref()
                 .is_some_and(|parent| parent.source == Source::Pinned)
         };
+        let replaceable = |name: &&String| !replaced.contains(*name);
         let victim = cycle
             .iter()
+            .filter(replaceable)
             .find(|name| !pinned(name))
-            .unwrap_or(&cycle[0])
-            .clone();
+            .or_else(|| cycle.iter().find(replaceable))
+            .cloned();
+        let Some(victim) = victim else {
+            let entry = resolved
+                .get_mut(&cycle[0])
+                .expect("cycle members are resolved");
+            entry.parent = None;
+            continue;
+        };
         let entry = resolved
             .get_mut(&victim)
             .expect("cycle members are resolved");
@@ -422,6 +436,7 @@ fn break_cycles(
         entry.parent = derived[&victim]
             .clone()
             .map(|parent| Parent { replaces, ..parent });
+        replaced.insert(victim);
     }
 }
 
@@ -451,4 +466,45 @@ fn find_cycle(resolved: &BTreeMap<String, Resolved>) -> Option<Vec<String>> {
         cleared.extend(path);
     }
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn entry(parent: &str) -> Resolved {
+        Resolved {
+            tip: String::new(),
+            role: Role::Branch,
+            parent: Some(Parent {
+                name: parent.into(),
+                offshoot: String::new(),
+                source: Source::Derived,
+                needs_restack: false,
+                contradicted: false,
+                replaces: None,
+            }),
+        }
+    }
+
+    #[test]
+    fn cycles_of_derived_parents_are_cut_rather_than_looping() {
+        let mut resolved =
+            BTreeMap::from([("a".to_owned(), entry("b")), ("b".to_owned(), entry("a"))]);
+        let derived = resolved
+            .iter()
+            .map(|(name, entry)| (name.clone(), entry.parent.clone()))
+            .collect();
+
+        break_cycles(&mut resolved, &derived);
+
+        assert!(find_cycle(&resolved).is_none());
+        assert_eq!(
+            resolved
+                .values()
+                .filter(|entry| entry.parent.is_none())
+                .count(),
+            1
+        );
+    }
 }

@@ -433,3 +433,84 @@ mod trunks {
         ));
     }
 }
+
+mod splitting {
+    use super::*;
+
+    /// `develop` ← `a` ← `d`, where `d` has three commits. Returns the ids of `d`'s first two commits.
+    fn long_branch(fixture: &Fixture) -> (String, String) {
+        grow(fixture, "a", "develop");
+        fixture.git(&["switch", "--quiet", "--create", "d", "a"]);
+        let first = fixture.commit("b.txt", "b", "feat: b");
+        let second = fixture.commit("c.txt", "c", "feat: c");
+        fixture.commit("d.txt", "d", "feat: d");
+        (first, second)
+    }
+
+    fn split(fixture: &Fixture, first: &str, second: &str) {
+        fixture.git(&["branch", "b", first]);
+        fixture.git(&["branch", "c", second]);
+    }
+
+    #[test]
+    fn branches_created_inside_a_branch_become_its_parents() {
+        let fixture = repo();
+        let (first, second) = long_branch(&fixture);
+
+        split(&fixture, &first, &second);
+
+        let tree = tree(&fixture);
+        assert_eq!(shape(&tree), "develop(a(b(c(d))))");
+        assert_eq!(parent(&tree, "d").unwrap().offshoot, second);
+        assert_eq!(parent(&tree, "b").unwrap().name, "a");
+    }
+
+    #[test]
+    fn a_recorded_parent_gives_way_to_the_split() {
+        let fixture = repo();
+        let (first, second) = long_branch(&fixture);
+        record(&fixture, "d", "a", &tip(&fixture, "a"), false);
+
+        split(&fixture, &first, &second);
+
+        let tree = tree(&fixture);
+        assert_eq!(shape(&tree), "develop(a(b(c(d))))");
+        assert_eq!(parent(&tree, "d").unwrap().replaces.as_deref(), Some("a"));
+    }
+
+    #[test]
+    fn a_pinned_parent_holds_through_the_split_and_is_flagged() {
+        let fixture = repo();
+        let (first, second) = long_branch(&fixture);
+        workspace(&fixture).pin("d", Some("a")).unwrap();
+
+        split(&fixture, &first, &second);
+
+        let tree = tree(&fixture);
+        assert_eq!(shape(&tree), "develop(a(b(c) d))");
+        assert!(parent(&tree, "d").unwrap().contradicted);
+    }
+
+    #[test]
+    fn restacking_after_a_split_keeps_each_commit_on_its_own_branch() {
+        let fixture = repo();
+        let (first, second) = long_branch(&fixture);
+        split(&fixture, &first, &second);
+        fixture.git(&["switch", "--quiet", "develop"]);
+        fixture.commit("later.txt", "later", "feat: later");
+
+        let restacked = workspace(&fixture).restack("develop").unwrap();
+
+        let moved: Vec<(&str, usize)> = restacked
+            .moved
+            .iter()
+            .map(|moved| (moved.name.as_str(), moved.replayed))
+            .collect();
+        assert_eq!(moved, [("a", 1), ("b", 1), ("c", 1), ("d", 1)]);
+        assert_eq!(
+            fixture.git(&["log", "--format=%s", "develop..d"]),
+            "feat: d\nfeat: c\nfeat: b\nfeat: a"
+        );
+        assert_eq!(shape(&tree(&fixture)), "develop(a(b(c(d))))");
+    }
+}
