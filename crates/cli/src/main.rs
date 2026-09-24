@@ -486,13 +486,22 @@ fn run(cli: &Cli) -> Result<()> {
                 format!("Split {branch} into {}", created.join(", ")),
             );
         }
-        Command::Undo => {
-            let undone = workspace.undo()?;
+        Command::Undo { to } => {
+            let undone = match to {
+                Some(id) => workspace.undo_to(*id)?,
+                None => vec![workspace.undo()?],
+            };
             note_follower_syncs(&workspace)?;
-            print(
-                to_value(&undone)?,
-                format!("Undid #{}: {}", undone.id, undone.description),
-            );
+            let lines: Vec<String> = undone
+                .iter()
+                .map(|operation| format!("Undid #{}: {}", operation.id, operation.description))
+                .collect();
+            let value = if to.is_some() {
+                to_value(&undone)?
+            } else {
+                to_value(&undone[0])?
+            };
+            print(value, lines.join("\n"));
         }
         Command::Redo => {
             let redone = workspace.redo()?;

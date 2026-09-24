@@ -203,7 +203,11 @@ pub(crate) enum Command {
         points: Vec<(String, String)>,
     },
     /// Revert the latest stack command.
-    Undo,
+    Undo {
+        /// Revert every command from this op log id on instead (see `stack oplog`).
+        #[arg(long, value_name = "ID")]
+        to: Option<i64>,
+    },
     /// Re-apply the most recently undone command.
     Redo,
     /// List recent stack operations, newest first.
