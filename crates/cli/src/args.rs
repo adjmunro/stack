@@ -202,6 +202,13 @@ pub(crate) enum Command {
         #[arg(required = true, value_parser = parse_point)]
         points: Vec<(String, String)>,
     },
+    /// Amend the staged changes into an earlier commit of this stack (not just HEAD); later commits and the branches
+    /// above are restacked. The working tree isn't touched.
+    Amend {
+        /// The commit to amend.
+        #[arg(long, value_name = "COMMIT")]
+        into: String,
+    },
     /// Line branches up into one stack, in the order given: each moves onto the one before it.
     Chain {
         #[arg(required = true, num_args = 2..)]

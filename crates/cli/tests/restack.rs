@@ -235,3 +235,20 @@ fn chain_and_multi_move() {
         "{moved}"
     );
 }
+
+#[test]
+fn amend_into_a_parent_branch() {
+    let fixture = advanced();
+    fixture.write("a.txt", "a, fixed");
+    fixture.git(&["add", "a.txt"]);
+    let old = fixture.git(&["rev-parse", "--short=7", "feat/a"]);
+
+    let output = stdout(&stack(&fixture, &["amend", "--into", "feat/a"]));
+
+    let new = fixture.git(&["rev-parse", "--short=7", "feat/a"]);
+    assert_eq!(
+        output,
+        format!("Amended {old} into {new} on feat/a\nRestacked feat/b onto feat/a (1 commit)\n")
+    );
+    assert_eq!(fixture.git(&["show", "feat/b:a.txt"]), "a, fixed");
+}

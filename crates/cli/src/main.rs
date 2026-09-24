@@ -536,6 +536,33 @@ fn run(cli: &Cli) -> Result<()> {
                 return Err("some commit subjects break the rules".into());
             }
         }
+        Command::Amend { into } => {
+            let amended = workspace.amend_into(into)?;
+            let summary = format!(
+                "Amended {} into {} on {}",
+                short(&amended.commit),
+                short(&amended.rewritten),
+                amended.branch
+            );
+            let others: Vec<_> = amended
+                .restacked
+                .moved
+                .iter()
+                .filter(|moved| moved.name != amended.branch)
+                .cloned()
+                .collect();
+            let rest = Restacked {
+                moved: others,
+                ..amended.restacked.clone()
+            };
+            let human = if rest.moved.is_empty() {
+                summary
+            } else {
+                format!("{summary}\n{}", describe_restack(&rest, false))
+            };
+            print(to_value(&amended)?, human);
+            note_follower_syncs(&workspace)?;
+        }
         Command::Split { branch, points } => {
             let created = workspace.split(branch, points)?;
             print(
