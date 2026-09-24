@@ -210,6 +210,11 @@ pub(crate) enum Command {
         #[arg(long)]
         no_resolve: bool,
     },
+    /// Check a branch's commit subjects against the rules (stack.lint.pattern, stack.lint.maxLength).
+    Lint {
+        /// Branch to check [default: current branch].
+        branch: Option<String>,
+    },
     /// Revert the latest stack command.
     Undo {
         /// Revert every command from this op log id on instead (see `stack oplog`).

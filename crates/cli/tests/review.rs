@@ -108,3 +108,21 @@ fn delta_shows_only_the_real_difference() {
         "{commits}"
     );
 }
+
+#[test]
+fn lint_reports_and_fails() {
+    let fixture = Fixture::new();
+    fixture.commit("base.txt", "base", "feat: base");
+    stack(&fixture, &["trunk", "add", "develop"]);
+    fixture.git(&["switch", "--quiet", "--create", "a"]);
+    fixture.commit("a.txt", "a", "feat: a");
+    assert_eq!(stdout(&stack(&fixture, &["lint"])), "a's commits pass\n");
+
+    let wip = fixture.commit("b.txt", "b", "WIP");
+    let output = stack(&fixture, &["lint"]);
+    assert_eq!(
+        String::from_utf8(output.stdout.clone()).unwrap(),
+        format!("{} WIP (doesn't match stack.lint.pattern)\n", &wip[..7])
+    );
+    assert!(!output.status.success());
+}

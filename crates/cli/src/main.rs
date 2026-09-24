@@ -18,7 +18,7 @@ use serde_json::{Value, to_value};
 
 use stack_core::{
     CommitRange, CommitReview, Conflict, Direction, Error, FollowPosition, FollowerSync,
-    GuardViolation, Head, MarkKind, Marked, Node, Operation, OperationState, Outcome,
+    GuardViolation, Head, LintProblem, MarkKind, Marked, Node, Operation, OperationState, Outcome,
     ProposalAction, ProposedBranch, PushOutcome, Pushed, RecoveryOutcome, ResolveOutcome,
     RestackPreview, Restacked, Role, Scope, Source, Step, SyncOutcome, Synced, Tree, TrunkUpdate,
     Workspace, Worktree,
@@ -498,6 +498,42 @@ fn run(cli: &Cli) -> Result<()> {
                     "{b}'s changes conflict with {a}'s base in {paths}; try --commits"
                 )
                 .into());
+            }
+        }
+        Command::Lint { branch } => {
+            let branch = branch_or_current(&workspace, branch.as_deref())?;
+            let findings = workspace.lint(&branch)?;
+            let lines: Vec<String> = findings
+                .iter()
+                .map(|finding| {
+                    let problems: Vec<String> = finding
+                        .problems
+                        .iter()
+                        .map(|problem| match problem {
+                            LintProblem::TooLong { length, max } => {
+                                format!("{length} characters, over {max}")
+                            }
+                            LintProblem::NoMatch { .. } => {
+                                "doesn't match stack.lint.pattern".to_owned()
+                            }
+                        })
+                        .collect();
+                    format!(
+                        "{} {} ({})",
+                        short(&finding.commit),
+                        finding.summary,
+                        problems.join("; ")
+                    )
+                })
+                .collect();
+            let human = if lines.is_empty() {
+                format!("{branch}'s commits pass")
+            } else {
+                lines.join("\n")
+            };
+            print(to_value(&findings)?, human);
+            if !findings.is_empty() {
+                return Err("some commit subjects break the rules".into());
             }
         }
         Command::Split { branch, points } => {
