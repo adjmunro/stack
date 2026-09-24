@@ -7,9 +7,10 @@ use crate::git::{GitRepo, GixRepo, RefUpdate};
 use crate::journal::Journal;
 use crate::metadata::{self, Link, Mark, Metadata};
 use crate::resolve::Resolution;
+use crate::restack::Mode;
 use crate::{
-    Error, Head, Moved, Operation, OperationKind, Outcome, Parent, Recovered, Restacked, Role,
-    Status, Tree,
+    Error, Head, Moved, Operation, OperationKind, Outcome, Parent, PreviewedMove, Recovered,
+    RestackPreview, Restacked, Role, Status, Tree,
 };
 
 /// Entry point for all `stack` operations on one repository.
@@ -221,6 +222,51 @@ impl Workspace {
         self.apply_restack(&metadata, &resolution, branch, &format!("restack {branch}"))
     }
 
+    /// Previews restacking `target` (or every trunk, if `None`) without changing anything: which branches would move
+    /// cleanly, which would conflict, and which are blocked behind a conflict.
+    ///
+    /// Merges write unreferenced tree objects, as `git merge-tree` does; no commits, refs, or signatures.
+    ///
+    /// # Errors
+    /// [`Error::UnknownBranch`], or as [`Self::restack`]'s planning.
+    pub fn check(&self, target: Option<&str>) -> Result<RestackPreview, Error> {
+        let (_, resolution) = self.resolve()?;
+        let targets: Vec<&str> = match target {
+            Some(target) if !resolution.branches.contains_key(target) => {
+                return Err(Error::UnknownBranch {
+                    name: target.into(),
+                });
+            }
+            Some(target) => vec![target],
+            None => resolution
+                .branches
+                .iter()
+                .filter(|(_, entry)| entry.role == Role::Trunk)
+                .map(|(name, _)| name.as_str())
+                .collect(),
+        };
+        let mut preview = RestackPreview {
+            clean: Vec::new(),
+            conflicts: Vec::new(),
+            blocked: Vec::new(),
+        };
+        for target in targets {
+            let plan = crate::restack::plan(&*self.git, &resolution, target, Mode::Preview)?;
+            preview
+                .clean
+                .extend(plan.moves.into_iter().map(|moved| PreviewedMove {
+                    name: moved.branch,
+                    onto: moved.onto,
+                    replayed: moved.replayed,
+                    dropped: moved.dropped,
+                }));
+            preview.conflicts.extend(plan.conflicts);
+            preview.blocked.extend(plan.blocked);
+        }
+        preview.blocked.sort();
+        Ok(preview)
+    }
+
     /// Moves `branch` onto `onto`: replays its own commits onto `onto`'s tip, restacks everything leafward of it, and
     /// records `onto` as its parent (still pinned, if it was). Otherwise as [`Self::restack`].
     ///
@@ -280,14 +326,14 @@ impl Workspace {
         target: &str,
         description: &str,
     ) -> Result<Restacked, Error> {
-        let plan = crate::restack::plan(&*self.git, resolution, target)?;
+        let plan = crate::restack::plan(&*self.git, resolution, target, Mode::Apply)?;
         let mut updates: Vec<RefUpdate> = plan
             .moves
             .iter()
             .map(|moved| RefUpdate {
                 name: format!("refs/heads/{}", moved.branch),
                 old: Some(moved.old.clone()),
-                new: Some(moved.new.clone()),
+                new: moved.new.clone(),
             })
             .collect();
         for (name, link) in &plan.links {
@@ -330,7 +376,7 @@ impl Workspace {
                 name: moved.branch,
                 onto: moved.onto,
                 old: moved.old,
-                new: moved.new,
+                new: moved.new.expect("applied plans write commits"),
                 replayed: moved.replayed,
                 dropped: moved.dropped,
             })
@@ -338,7 +384,8 @@ impl Workspace {
         Ok(Restacked {
             outcome,
             moved,
-            conflict: plan.conflict,
+            conflicts: plan.conflicts,
+            blocked: plan.blocked,
         })
     }
 

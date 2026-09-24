@@ -160,9 +160,30 @@ pub struct Restacked {
     pub outcome: Outcome,
     /// Branches moved onto their parent's current tip, parents first.
     pub moved: Vec<Moved>,
-    /// The first conflict hit. That branch and everything leafward of it were left as they were; everything else
-    /// was restacked.
-    pub conflict: Option<Conflict>,
+    /// Branches that hit a conflict. Each was left as it was, with everything leafward of it; everything else was
+    /// restacked.
+    pub conflicts: Vec<Conflict>,
+    /// Branches left as they were because a branch rootward of them conflicted, sorted.
+    pub blocked: Vec<String>,
+}
+
+/// What [`crate::Workspace::check`] found a restack would do. Nothing is changed.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct RestackPreview {
+    /// Branches that would move cleanly, parents first.
+    pub clean: Vec<PreviewedMove>,
+    pub conflicts: Vec<Conflict>,
+    /// Branches that can't be checked because a branch rootward of them conflicts, sorted.
+    pub blocked: Vec<String>,
+}
+
+/// A branch a restack would move cleanly.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct PreviewedMove {
+    pub name: String,
+    pub onto: String,
+    pub replayed: usize,
+    pub dropped: usize,
 }
 
 /// A branch moved by a restack.

@@ -54,7 +54,7 @@ fn moves_the_stack_onto_the_advanced_trunk() {
             .iter()
             .all(|moved| (moved.replayed, moved.dropped) == (1, 0))
     );
-    assert_eq!(restacked.conflict, None);
+    assert!(restacked.conflicts.is_empty() && restacked.blocked.is_empty());
     assert_eq!(subjects(&fixture, "develop..b"), ["feat: b", "feat: a"]);
     assert_eq!(
         fixture.git(&["merge-base", "a", "develop"]),
@@ -258,7 +258,11 @@ fn conflict_skips_that_branch_and_its_descendants_only() {
     let restacked = workspace(&fixture).restack("develop").unwrap();
 
     assert_eq!(moved_names(&restacked), ["c"]);
-    let conflict = restacked.conflict.unwrap();
+    assert_eq!(restacked.blocked, ["b"]);
+    let [conflict] = restacked.conflicts.as_slice() else {
+        panic!("{:?}", restacked.conflicts)
+    };
+    let conflict = conflict.clone();
     assert_eq!(
         (conflict.branch.as_str(), conflict.onto.as_str()),
         ("a", "develop")
