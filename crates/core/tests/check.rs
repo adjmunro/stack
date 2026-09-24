@@ -43,20 +43,7 @@ fn reports_clean_moves_conflicts_and_blocked_branches_without_changes() {
     );
     assert_eq!(preview.blocked, ["b"]);
 
-    let diff = before.diff(&fixture.snapshot());
-    assert!(
-        diff.refs.is_empty()
-            && diff.stack.is_empty()
-            && diff.worktree.is_empty()
-            && diff.index.is_empty()
-    );
-    for object in &diff.objects_added {
-        assert_ne!(
-            fixture.git(&["cat-file", "-t", object]),
-            "commit",
-            "preview wrote a commit"
-        );
-    }
+    fixture.assert_unchanged(&before);
 }
 
 #[test]

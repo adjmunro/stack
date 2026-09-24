@@ -26,11 +26,27 @@ impl Workspace {
     /// Previews restacking `target` (or every trunk, if `None`) without changing anything: which branches would move
     /// cleanly, which would conflict, and which are blocked behind a conflict.
     ///
-    /// Merges write unreferenced tree objects, as `git merge-tree` does; no commits, refs, or signatures.
+    /// Writes nothing: merges run against a temporary object directory, and no commit is created or signed.
     ///
     /// # Errors
     /// [`Error::UnknownBranch`], or as [`Self::restack`]'s planning.
     pub fn check(&self, target: Option<&str>) -> Result<RestackPreview, Error> {
+        let objects = std::env::temp_dir().join(format!(
+            "stack-check-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |elapsed| elapsed.as_nanos())
+        ));
+        std::fs::create_dir_all(&objects).map_err(Error::git)?;
+        self.git.quarantine(Some(&objects));
+        let preview = self.check_quarantined(target);
+        self.git.quarantine(None);
+        let _ = std::fs::remove_dir_all(&objects);
+        preview
+    }
+
+    fn check_quarantined(&self, target: Option<&str>) -> Result<RestackPreview, Error> {
         let (_, resolution) = self.resolve()?;
         let targets: Vec<&str> = match target {
             Some(target) if !resolution.branches.contains_key(target) => {

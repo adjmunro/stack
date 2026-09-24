@@ -242,6 +242,10 @@ pub(crate) trait GitRepo: Send + Sync {
     /// Only if git can't run or the remote can't be reached; per-branch rejections are in the result.
     fn push(&self, remote: &str, branches: &[PushRef]) -> Result<Vec<PushStatus>, Error>;
 
+    /// While `objects` is set, objects `git` subprocesses write go there instead of the repository; they can still
+    /// read the repository's. `None` ends the quarantine. The in-process library is unaffected.
+    fn quarantine(&self, objects: Option<&Path>);
+
     /// Makes `remote`/`branch` the upstream of local `branch`.
     fn set_upstream(&self, branch: &str, remote: &str) -> Result<(), Error>;
 
@@ -275,6 +279,9 @@ pub(crate) struct GixRepo {
     /// `commit.gpgSign`, read on first use.
     signs_commits: std::sync::OnceLock<bool>,
     environment: Environment,
+    /// While set, `git` subprocesses write new objects here instead of the repository (reading the repository's
+    /// objects as alternates).
+    quarantine: std::sync::Mutex<Option<PathBuf>>,
 }
 
 impl GixRepo {
@@ -329,6 +336,16 @@ impl GixRepo {
                     .envs(variables.iter().map(|(key, value)| (key, value)));
             }
         }
+        let quarantine = self
+            .quarantine
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if let Some(objects) = quarantine.as_ref() {
+            let real = self.repo.to_thread_local().common_dir().join("objects");
+            command
+                .env("GIT_OBJECT_DIRECTORY", objects)
+                .env("GIT_ALTERNATE_OBJECT_DIRECTORIES", real);
+        }
         command
     }
 
@@ -356,6 +373,7 @@ impl GixRepo {
         Ok(Self {
             repo,
             signs_commits: std::sync::OnceLock::new(),
+            quarantine: std::sync::Mutex::new(None),
             environment,
         })
     }
@@ -929,6 +947,13 @@ impl GitRepo for GixRepo {
             args.push("--all");
         }
         run_ok(&mut self.git(&args), message.as_bytes()).map(|_| ())
+    }
+
+    fn quarantine(&self, objects: Option<&Path>) {
+        *self
+            .quarantine
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = objects.map(Path::to_owned);
     }
 
     fn set_upstream(&self, branch: &str, remote: &str) -> Result<(), Error> {

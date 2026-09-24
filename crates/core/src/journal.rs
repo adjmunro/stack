@@ -498,6 +498,9 @@ mod tests {
         fn set_upstream(&self, branch: &str, remote: &str) -> Result<(), Error> {
             self.inner.set_upstream(branch, remote)
         }
+        fn quarantine(&self, objects: Option<&Path>) {
+            self.inner.quarantine(objects)
+        }
         fn switch(&self, branch: &str, create: bool) -> Result<(), Error> {
             self.inner.switch(branch, create)
         }
