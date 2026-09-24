@@ -13,6 +13,12 @@
 - Before mutating source control or interacting with remote repositories, read [`GIT.md`](docs/GIT.md)!
 - Use [`TODO.md`](docs/TODO.md) to record & track tasks.
 
+## Known Pitfalls
+
+- `cargo fmt` (default width) reflows long lines, so exact-match edits written before formatting often miss. Read the formatted code, or match with patterns.
+- macOS has no `timeout` command; use the tool's own timeout instead.
+- Tests must never inherit the developer's git config: open workspaces with `Environment::Exactly(fixture.environment())`, and run git through the fixture.
+
 ## Editing Agents.md
 
 > Agents.md is a record of **mistakes**.
