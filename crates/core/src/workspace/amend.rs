@@ -14,7 +14,6 @@ impl Workspace {
     /// - [`Error::MergeCommit`] for a merge commit.
     /// - [`Error::AmendConflict`] if the change, or anything replayed after it, conflicts; nothing is changed.
     pub fn amend_into(&self, revision: &str) -> Result<Amended, Error> {
-        let (metadata, resolution) = self.resolve()?;
         let Head::Branch {
             name: current,
             commit: Some(head),
@@ -28,29 +27,43 @@ impl Workspace {
             return Err(Error::NothingStaged);
         }
         let target = self.git.resolve_commit(revision)?;
+        self.amend_change(&current, &target, &head_tree, &staged, revision)
+    }
+
+    /// Applies the change from tree `base` to tree `changed` to commit `target` in `current`'s stack, as
+    /// [`Self::amend_into`] does; `revision` names the target in errors.
+    pub(super) fn amend_change(
+        &self,
+        current: &str,
+        target: &str,
+        base: &str,
+        changed: &str,
+        revision: &str,
+    ) -> Result<Amended, Error> {
+        let (metadata, resolution) = self.resolve()?;
         let owner = self
-            .owner_of(&resolution, &current, &target)?
+            .owner_of(&resolution, current, target)?
             .ok_or_else(|| Error::NotInStack {
                 revision: revision.into(),
             })?;
-        let info = self.git.commit(&target)?;
+        let info = self.git.commit(target)?;
         let [parent] = info.parents.as_slice() else {
             return Err(Error::MergeCommit {
                 branch: owner,
-                commit: target,
+                commit: target.into(),
             });
         };
 
-        // The staged change, applied to the target commit.
+        // The change, applied to the target commit.
         let conflict = |paths: Vec<String>| Error::AmendConflict {
-            commit: target.clone(),
+            commit: target.into(),
             paths,
         };
-        let tree = match self.git.merge_trees(&head_tree, &info.tree, &staged)? {
+        let tree = match self.git.merge_trees(base, &info.tree, changed)? {
             Merge::Clean { tree } => tree,
             Merge::Conflicted { paths } => return Err(conflict(paths)),
         };
-        let rewritten = self.git.copy_commit(&target, &tree, parent)?;
+        let rewritten = self.git.copy_commit(target, &tree, parent)?;
 
         // The rest of the owner's commits, then everything leafward of it.
         let owner_tip = resolution.branches[&owner].tip.clone();
@@ -62,7 +75,7 @@ impl Workspace {
             &*self.git,
             &owner,
             &owner_tip,
-            &target,
+            target,
             onto,
             Mode::Apply,
         )? {
@@ -82,7 +95,7 @@ impl Workspace {
             .expect("the current branch is the owner or leafward of it");
         let index = Checkout {
             worktree: None,
-            from: staged,
+            from: self.git.write_index_tree()?,
             to: new_head,
             index_only: true,
         };
@@ -92,10 +105,10 @@ impl Workspace {
             &resolution,
             plan,
             &description,
-            Some((&current, index)),
+            Some((current, index)),
         )?;
         Ok(Amended {
-            commit: target,
+            commit: target.into(),
             rewritten,
             branch: owner,
             restacked,

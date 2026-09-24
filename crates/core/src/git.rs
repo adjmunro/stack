@@ -207,6 +207,21 @@ pub(crate) trait GitRepo: Send + Sync {
     /// without changes; others are carried along.
     fn checkout(&self, worktree: Option<&Path>, from: &str, to: &str) -> Result<(), Error>;
 
+    /// The staged changes (`git diff --cached -U0`) as a patch, raw.
+    fn staged_patch(&self) -> Result<Vec<u8>, Error>;
+
+    /// The commit that last changed each of lines `start..start + count` of `path` at `commit` (`git blame`).
+    fn blame(
+        &self,
+        commit: &str,
+        path: &str,
+        start: usize,
+        count: usize,
+    ) -> Result<Vec<String>, Error>;
+
+    /// `tree` with `patch` applied (`git apply --cached --unidiff-zero` on a throwaway index). Writes the new tree.
+    fn apply_to_tree(&self, tree: &str, patch: &[u8]) -> Result<String, Error>;
+
     /// This worktree's index as a tree (`git write-tree`).
     ///
     /// # Errors
@@ -879,6 +894,74 @@ impl GitRepo for GixRepo {
             b"",
         )
         .map(|_| ())
+    }
+
+    fn staged_patch(&self) -> Result<Vec<u8>, Error> {
+        let args = [
+            "diff",
+            "--cached",
+            "-U0",
+            "--no-color",
+            "--no-ext-diff",
+            "--no-textconv",
+            "--no-renames",
+        ];
+        run_ok(&mut self.git(&args), b"")
+    }
+
+    fn blame(
+        &self,
+        commit: &str,
+        path: &str,
+        start: usize,
+        count: usize,
+    ) -> Result<Vec<String>, Error> {
+        let range = format!("{start},+{count}");
+        let output = run_ok(
+            &mut self.git(&["blame", "--porcelain", "-L", &range, commit, "--", path]),
+            b"",
+        )?;
+        let text = String::from_utf8_lossy(&output);
+        let is_header = |line: &&str| {
+            let mut fields = line.split(' ');
+            fields
+                .next()
+                .is_some_and(|id| id.len() >= 40 && id.chars().all(|c| c.is_ascii_hexdigit()))
+                && fields
+                    .next()
+                    .is_some_and(|number| number.parse::<usize>().is_ok())
+        };
+        Ok(text
+            .lines()
+            .filter(is_header)
+            .map(|line| line[..line.find(' ').unwrap_or(line.len())].to_owned())
+            .collect())
+    }
+
+    fn apply_to_tree(&self, tree: &str, patch: &[u8]) -> Result<String, Error> {
+        let index = std::env::temp_dir().join(format!(
+            "stack-index-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |elapsed| elapsed.as_nanos())
+        ));
+        let with_index = |args: &[&str]| {
+            let mut command = self.git(args);
+            command.env("GIT_INDEX_FILE", &index);
+            command
+        };
+        let result = (|| {
+            run_ok(&mut with_index(&["read-tree", tree]), b"")?;
+            run_ok(
+                &mut with_index(&["apply", "--cached", "--unidiff-zero", "-"]),
+                patch,
+            )?;
+            let written = run_ok(&mut with_index(&["write-tree"]), b"")?;
+            Ok(String::from_utf8_lossy(&written).trim().to_owned())
+        })();
+        let _ = std::fs::remove_file(&index);
+        result
     }
 
     fn write_index_tree(&self) -> Result<String, Error> {

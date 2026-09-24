@@ -507,6 +507,33 @@ pub struct Amended {
     pub restacked: Restacked,
 }
 
+/// The result of [`crate::Workspace::absorb`].
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+pub struct Absorbed {
+    /// Hunks folded into commits.
+    pub absorbed: Vec<AbsorbedHunk>,
+    /// Hunks left staged, and why.
+    pub left: Vec<StagedHunk>,
+    /// One amend per target commit, nearest to HEAD first.
+    pub amended: Vec<Amended>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct AbsorbedHunk {
+    pub path: String,
+    /// E.g. `line 3`, `lines 3-5`, `after line 3` (in HEAD before absorbing).
+    pub lines: String,
+    /// The commit it went into (as it was before being amended).
+    pub commit: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct StagedHunk {
+    pub path: String,
+    pub lines: String,
+    pub reason: Option<String>,
+}
+
 /// The result of [`crate::Workspace::push`].
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Pushed {

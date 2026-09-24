@@ -517,6 +517,21 @@ mod tests {
         fn checkout(&self, worktree: Option<&Path>, from: &str, to: &str) -> Result<(), Error> {
             self.inner.checkout(worktree, from, to)
         }
+        fn staged_patch(&self) -> Result<Vec<u8>, Error> {
+            self.inner.staged_patch()
+        }
+        fn blame(
+            &self,
+            commit: &str,
+            path: &str,
+            start: usize,
+            count: usize,
+        ) -> Result<Vec<String>, Error> {
+            self.inner.blame(commit, path, start, count)
+        }
+        fn apply_to_tree(&self, tree: &str, patch: &[u8]) -> Result<String, Error> {
+            self.inner.apply_to_tree(tree, patch)
+        }
         fn write_index_tree(&self) -> Result<String, Error> {
             self.inner.write_index_tree()
         }
