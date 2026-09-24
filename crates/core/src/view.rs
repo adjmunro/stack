@@ -450,6 +450,26 @@ pub struct GuardInstalled {
     pub chained: bool,
 }
 
+/// Two branches' own changes, from [`crate::Workspace::delta`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct Delta {
+    pub a: CommitRange,
+    pub b: CommitRange,
+    /// A tree: `b`'s own changes replayed onto `a`'s base. Diff it against `a.tip` to see only how the changes
+    /// differ. `None` if replaying conflicts.
+    pub b_on_a_base: Option<String>,
+    /// Paths that conflict when replaying `b` onto `a`'s base.
+    pub conflicts: Vec<String>,
+}
+
+/// A branch's own commits: `base..tip`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct CommitRange {
+    pub branch: String,
+    pub base: String,
+    pub tip: String,
+}
+
 /// The result of [`crate::Workspace::push`].
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Pushed {
