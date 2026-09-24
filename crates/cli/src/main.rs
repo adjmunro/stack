@@ -121,6 +121,12 @@ enum Command {
         #[arg(short, long, requires = "message")]
         all: bool,
     },
+    /// Put a branch away: hidden from git branch, the tree, restack, and push, but kept safe.
+    Archive { branch: String },
+    /// Bring an archived branch back.
+    Unarchive { name: String },
+    /// List archived branches.
+    Archived,
     /// Revert the latest stack command.
     Undo,
     /// Re-apply the most recently undone command.
@@ -276,6 +282,33 @@ fn run(cli: &Cli) -> Result<()> {
                 serde_json::json!({ "created": name }),
                 format!("Created {name}"),
             );
+        }
+        Command::Archive { branch } => {
+            workspace.archive(branch)?;
+            print(
+                serde_json::json!({ "archived": branch }),
+                format!("Archived {branch}"),
+            );
+        }
+        Command::Unarchive { name } => {
+            workspace.unarchive(name)?;
+            print(
+                serde_json::json!({ "unarchived": name }),
+                format!("Restored {name}"),
+            );
+        }
+        Command::Archived => {
+            let archived = workspace.archived()?;
+            let human = if archived.is_empty() {
+                "No archived branches.".to_owned()
+            } else {
+                archived
+                    .iter()
+                    .map(|branch| format!("{} {}", branch.name, short(&branch.commit)))
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            };
+            print(to_value(&archived)?, human);
         }
         Command::Undo => {
             let undone = workspace.undo()?;

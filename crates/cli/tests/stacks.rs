@@ -218,3 +218,31 @@ fn unpin_and_trunk_remove_leave_only_the_op_log_behind() {
     // Two metadata blobs, and one keep tree after each removal.
     assert_eq!(diff.objects_added.len(), 4);
 }
+
+#[test]
+fn archive_and_restore() {
+    let fixture = repo();
+    stack(&fixture, &["trunk", "add", "develop"]);
+    let b = short(&fixture, "feat/b");
+
+    assert_eq!(
+        stdout(&stack(&fixture, &["archive", "feat/b"])),
+        "Archived feat/b\n"
+    );
+    assert_eq!(
+        stdout(&stack(&fixture, &["archived"])),
+        format!("feat/b {b}\n")
+    );
+    assert_eq!(
+        stdout(&stack(&fixture, &["unarchive", "feat/b"])),
+        "Restored feat/b\n"
+    );
+    assert_eq!(
+        stdout(&stack(&fixture, &["archived"])),
+        "No archived branches.\n"
+    );
+    assert_eq!(
+        stderr(&stack(&fixture, &["archive", "feat/a"])),
+        "error: feat/a has branches on it: feat/b; move or archive them first\n"
+    );
+}
