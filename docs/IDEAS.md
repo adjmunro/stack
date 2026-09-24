@@ -6,7 +6,7 @@ You should remove bullets point when they are or become complete and fully imple
 
 ---
 
-- Mark commits as “read” / a green highlight after review and/or build & test run. Keep the highlight after rebase unless the commit delta actually changes. Red to flag things for later? Maybe even flag specific hunks of files of commits.
+- Flag specific hunks of files of commits (commit-level reviewed/tested/flagged marks are done; the GUI highlight is still to come).
 - Better “view parents/children of [branch]”. Maybe that’s the default for the trunk view.
 - Synthetic octomerge branches with conflict resolution patches. Flattens when merged?
 - Stack adaptors for both graphite and GitHub stack commands.

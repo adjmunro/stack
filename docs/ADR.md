@@ -139,3 +139,8 @@
 - Detail: Archiving moves `refs/heads/<b>` to `refs/stack/archive/<b>` (a commit ref) in one journalled transaction. Refused for trunks, branches with branches on them, and checked-out branches.
 - Detail: Archived branches keep their recorded parent; restack's pruning skips them.
 - Reason: Leaving `refs/heads/` hides the branch from `git branch`, IDEs, and every `stack` view, while the archive ref keeps its commits from `gc`. The cost: like `git stash`, archived commits appear in `git log --all`.
+
+2026-09-24T08:08Z@250e88a9
+- Category: review marks
+- Detail: Marks (reviewed, tested, flagged with an optional note) are keyed by the commit's stable `git patch-id` (`patch:<id>`), or by commit id for merges and empty commits (`commit:<sha>`). Stored in the local SQLite store (schema v3), outside the op log.
+- Reason: A patch-id changes only when the commit's diff changes, so marks survive restacks, rebases, and rewording, and lapse exactly when the reviewed change changes. Marks are personal, so they aren't shared through refs.
