@@ -135,6 +135,53 @@ impl Workspace {
         )
     }
 
+    /// Moves each of `branches` onto `onto` in turn (making them siblings), as [`Self::move_branch`]. Stops at the
+    /// first branch that conflicts; the result gathers every move and that conflict.
+    ///
+    /// # Errors
+    /// As [`Self::move_branch`], for the first branch that fails; earlier moves stand (undo reverts them).
+    pub fn move_branches(&self, branches: &[&str], onto: &str) -> Result<Restacked, Error> {
+        let mut all = Restacked {
+            outcome: Outcome::Unchanged,
+            moved: Vec::new(),
+            conflicts: Vec::new(),
+            blocked: Vec::new(),
+        };
+        for branch in branches {
+            let restacked = self.move_branch(branch, onto)?;
+            let stop = !restacked.conflicts.is_empty();
+            merge_restacks(&mut all, restacked);
+            if stop {
+                break;
+            }
+        }
+        Ok(all)
+    }
+
+    /// Lines `branches` up into one stack in the given order: each moves onto the one before it, and the first stays
+    /// where it is. Stops at the first conflict, as [`Self::move_branches`].
+    ///
+    /// # Errors
+    /// [`Error::Cycle`] if a branch is stacked on a later one in the list (so the chain would loop); otherwise as
+    /// [`Self::move_branch`].
+    pub fn chain(&self, branches: &[&str]) -> Result<Restacked, Error> {
+        let mut all = Restacked {
+            outcome: Outcome::Unchanged,
+            moved: Vec::new(),
+            conflicts: Vec::new(),
+            blocked: Vec::new(),
+        };
+        for pair in branches.windows(2) {
+            let restacked = self.move_branch(pair[1], pair[0])?;
+            let stop = !restacked.conflicts.is_empty();
+            merge_restacks(&mut all, restacked);
+            if stop {
+                break;
+            }
+        }
+        Ok(all)
+    }
+
     /// Plans restacking `target` over `resolution` and applies it as one journalled command called `description`.
     fn apply_restack(
         &self,
@@ -210,4 +257,14 @@ impl Workspace {
             blocked: plan.blocked,
         })
     }
+}
+
+/// Adds `next`'s moves and conflicts to `all`.
+fn merge_restacks(all: &mut Restacked, next: Restacked) {
+    if next.outcome == Outcome::Changed {
+        all.outcome = Outcome::Changed;
+    }
+    all.moved.extend(next.moved);
+    all.conflicts.extend(next.conflicts);
+    all.blocked.extend(next.blocked);
 }

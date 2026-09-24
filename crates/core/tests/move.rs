@@ -116,3 +116,40 @@ fn invalid_moves_change_nothing() {
     ));
     fixture.assert_unchanged(&before);
 }
+
+#[test]
+fn moving_several_branches_onto_one_parent_makes_them_siblings() {
+    let fixture = stacks();
+
+    workspace(&fixture)
+        .move_branches(&["b", "c"], "develop")
+        .unwrap();
+
+    assert_eq!(shape(&tree(&fixture)), "develop(a b c x)");
+    assert_eq!(subjects(&fixture, "develop..c"), "feat: c");
+}
+
+#[test]
+fn chaining_lines_branches_up_in_order() {
+    let fixture = stacks();
+
+    workspace(&fixture).chain(&["x", "a"]).unwrap();
+
+    assert_eq!(shape(&tree(&fixture)), "develop(x(a(b(c))))");
+    assert_eq!(
+        subjects(&fixture, "develop..c"),
+        "feat: c\nfeat: b\nfeat: a\nfeat: x"
+    );
+}
+
+#[test]
+fn a_chain_that_would_loop_is_refused() {
+    let fixture = stacks();
+    let before = fixture.snapshot();
+
+    assert!(matches!(
+        workspace(&fixture).chain(&["b", "a"]),
+        Err(Error::Cycle { .. })
+    ));
+    fixture.assert_unchanged(&before);
+}
