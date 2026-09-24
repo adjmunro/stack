@@ -87,7 +87,11 @@ fn pr_pushes_and_opens_pull_requests_via_gh() {
     let state = fixture.scratch_path("gh-state");
     std::fs::create_dir(&bin).unwrap();
     std::fs::create_dir(&state).unwrap();
-    std::fs::copy(concat!(env!("CARGO_MANIFEST_DIR"), "/../core/tests/fake-gh.sh"), bin.join("gh")).unwrap();
+    std::fs::copy(
+        concat!(env!("CARGO_MANIFEST_DIR"), "/../core/tests/fake-gh.sh"),
+        bin.join("gh"),
+    )
+    .unwrap();
     let path = format!("{}:{}", bin.display(), std::env::var("PATH").unwrap());
 
     let output = fixture

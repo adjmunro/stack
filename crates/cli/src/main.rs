@@ -7,10 +7,10 @@ use std::process::ExitCode;
 use clap::{Parser, Subcommand};
 use serde_json::{Value, to_value};
 use stack_core::{
-    CommitReview, Conflict, Direction, Error, FollowPosition, FollowerSync, Head, MarkKind, Marked,
-    Node, Operation, OperationState, Outcome, ProposalAction, ProposedBranch, PushOutcome, Pushed,
-    RecoveryOutcome, RestackPreview, Restacked, Role, Scope, Source, Step, SyncOutcome, Tree,
-    Workspace, Worktree,
+    CommitReview, Conflict, Direction, Error, FollowPosition, FollowerSync, GuardViolation, Head,
+    MarkKind, Marked, Node, Operation, OperationState, Outcome, ProposalAction, ProposedBranch,
+    PushOutcome, Pushed, RecoveryOutcome, RestackPreview, Restacked, Role, Scope, Source, Step,
+    SyncOutcome, Tree, Workspace, Worktree,
 };
 
 type Result<T, E = Box<dyn std::error::Error>> = std::result::Result<T, E>;
@@ -168,6 +168,10 @@ enum Command {
     /// Import stacks from another tool.
     #[command(subcommand)]
     Import(ImportSource),
+    /// Guard every push (including plain git push): no pushing to protected branches or under another name without
+    /// a human confirming at a terminal.
+    #[command(subcommand)]
+    Guard(GuardCommand),
     /// Revert the latest stack command.
     Undo,
     /// Re-apply the most recently undone command.
@@ -228,6 +232,19 @@ impl LineArgs {
             through_limbs: self.all,
         }
     }
+}
+
+#[derive(Subcommand)]
+enum GuardCommand {
+    /// Install the guard as this repository's pre-push hook (an existing hook still runs, after it).
+    Install,
+    /// Remove the guard, restoring any hook it ran in front of.
+    Uninstall,
+    /// Show whether the guard is installed and which branches it protects.
+    Status,
+    /// Check a push's ref updates from stdin, as a pre-push hook; the hook runs this.
+    #[command(hide = true)]
+    CheckPush { remote: String, url: Option<String> },
 }
 
 #[derive(Subcommand)]
@@ -574,6 +591,58 @@ fn run(cli: &Cli) -> Result<()> {
                 return Err("some branches were rejected; fetch, restack, and try again".into());
             }
         }
+        Command::Guard(GuardCommand::Install) => {
+            let installed = workspace.install_guard(&std::env::current_exe()?)?;
+            let chained = if installed.chained {
+                " (your existing pre-push hook runs after it)"
+            } else {
+                ""
+            };
+            let protected = workspace.protected_branches()?.join(", ");
+            print(
+                to_value(&installed)?,
+                format!(
+                    "Installed the push guard at {}{chained}\nProtected: {protected}",
+                    installed.hook.display()
+                ),
+            );
+        }
+        Command::Guard(GuardCommand::Uninstall) => {
+            let removed = workspace.uninstall_guard()?;
+            let human = if removed {
+                "Removed the push guard"
+            } else {
+                "The push guard isn't installed"
+            };
+            print(serde_json::json!({ "removed": removed }), human.to_owned());
+        }
+        Command::Guard(GuardCommand::Status) => {
+            let installed = workspace.guard_installed()?;
+            let protected = workspace.protected_branches()?;
+            let human = format!(
+                "The push guard is {}installed\nProtected: {}",
+                if installed { "" } else { "not " },
+                if protected.is_empty() {
+                    "nothing".to_owned()
+                } else {
+                    protected.join(", ")
+                }
+            );
+            print(
+                serde_json::json!({ "installed": installed, "protected": protected }),
+                human,
+            );
+        }
+        Command::Guard(GuardCommand::CheckPush { remote, .. }) => {
+            let mut input = String::new();
+            std::io::Read::read_to_string(&mut std::io::stdin(), &mut input)?;
+            let violations = workspace.check_push(&input)?;
+            if !violations.is_empty() && !confirm_violations(remote, &violations)? {
+                return Err(
+                    "push refused by the stack guard; a human can confirm it at a terminal".into(),
+                );
+            }
+        }
         Command::Undo => {
             let undone = workspace.undo()?;
             note_follower_syncs(&workspace)?;
@@ -806,6 +875,53 @@ fn describe_proposal(proposal: &ProposedBranch) -> String {
         ProposalAction::UpToDate => format!("{number} ({branch} into {base}) is up to date"),
         ProposalAction::Skipped { reason } => format!("Skipped {branch}: {reason}"),
     }
+}
+
+/// Asks a human at the terminal to confirm each violation by typing the branch it concerns. Refuses without a
+/// terminal, or if `STACK_GUARD_PROMPT=never`.
+fn confirm_violations(remote: &str, violations: &[GuardViolation]) -> Result<bool> {
+    for violation in violations {
+        let what = match violation {
+            GuardViolation::Protected {
+                branch,
+                deleting: true,
+            } => format!("delete protected {remote}/{branch}"),
+            GuardViolation::Protected {
+                branch,
+                deleting: false,
+            } => format!("push to protected {remote}/{branch}"),
+            GuardViolation::NameMismatch {
+                local,
+                remote: target,
+            } => format!("push {local} to {remote}/{target}"),
+        };
+        eprintln!("stack guard: this would {what}");
+    }
+    if std::env::var("STACK_GUARD_PROMPT").is_ok_and(|prompt| prompt == "never") {
+        return Ok(false);
+    }
+    let Ok(mut tty) = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open("/dev/tty")
+    else {
+        return Ok(false);
+    };
+    let mut reader = std::io::BufReader::new(tty.try_clone()?);
+    for violation in violations {
+        let branch = match violation {
+            GuardViolation::Protected { branch, .. } => branch,
+            GuardViolation::NameMismatch { remote, .. } => remote,
+        };
+        write!(tty, "Type {branch} to allow it: ")?;
+        tty.flush()?;
+        let mut answer = String::new();
+        reader.read_line(&mut answer)?;
+        if answer.trim() != branch {
+            return Ok(false);
+        }
+    }
+    Ok(true)
 }
 
 fn describe_push(pushed: &Pushed) -> String {
