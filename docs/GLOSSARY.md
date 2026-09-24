@@ -26,6 +26,7 @@ Canonical vocabulary for the project. Prefer these names in code, schema, and do
 - **Guard**: a `pre-push` hook that refuses pushes to protected branches, or under another name, unless a human confirms at a terminal.
 - **Protected branch**: a root trunk, or a branch listed in `stack.protect`.
 - **Check**: a restack preview: which branches would move cleanly, conflict, or be blocked. Changes nothing.
+- **Delta**: how two branches' own changes differ, with the difference in their bases removed.
 - **Workspace**: the core facade over one git repo plus `stack` state. Entry point for every surface.
 - **Surface**: a consumer of the core (CLI, GUI, MCP).
 - **Metadata**: authoritative `stack` state stored in git refs under `refs/stack/`.

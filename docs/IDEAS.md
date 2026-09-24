@@ -23,7 +23,6 @@ You should remove bullets point when they are or become complete and fully imple
 - LLM generated messages & smart squash message rewrites
 - Commit header linter / customisable rules
 - Easier git hooks for toolchain checks
-- Diff commit / branch deltas, not full historical delta (i.e. I often want to see the difference between two similar branches, but there can be a lot of noise if the base is very different)
 - Swap between parallel branches and serial stacks
 - When resolving conflicts, click & drag to include a selected hunk instead of / as well as whole hunk and individual line options
 - Import filtering for diffs (Or some kind of “in `*.kt` ignore lines that start with `import *`)
