@@ -33,6 +33,5 @@ You should remove bullets point when they are or become complete and fully imple
   - A write mutex between worktrees: still one writer and any number of readers. The main workspace holds it by preference (so it never shows a detached HEAD). When a follower wants to commit, it asks for the lock, commits, and hands it back for the main workspace to reclaim. Only needed when the branch is checked out in the main workspace; otherwise the follower just commits.
 - Defer local commit signing until push.
 - Perfect undo & redo operations with extensive history.
-- Find lost HEADs
 - Multiple/different custom staging areas?
 - Split a branch into a stack from within `stack` (e.g. `a..d` → `b`, `c`, `d`, picking the commits for each), with tracking following automatically.
