@@ -177,3 +177,9 @@
 - Category: restack
 - Detail: `check` runs its merges with `GIT_OBJECT_DIRECTORY` pointed at a temporary directory and the repository's objects as `GIT_ALTERNATE_OBJECT_DIRECTORIES`, deleted afterwards. The repository is left byte-for-byte unchanged.
 - Reason: A GUI may run previews constantly; they shouldn't accumulate loose objects.
+
+2026-09-24T12:56Z@a68a1ca5
+- Category: restack conflicts
+- Detail: On a conflict, `stack restack`/`move` (unless `--no-resolve`) runs `git rebase --onto <parent> <offshoot> <branch>` for the first conflicting branch, if the worktree is clean and the branch isn't checked out elsewhere, and records the restack in the store. `stack continue` runs `git rebase --continue` (message kept) if needed, then restacks the target again; `stack abort` runs `git rebase --abort`.
+- Detail: The rebase is git's, not journalled; `git reflog` covers it. The restacks before and after are journalled as usual.
+- Reason: git's rebase gives the conflict UI people and IDEs already know, instead of a second, partial one in `stack`.

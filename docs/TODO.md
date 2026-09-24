@@ -34,7 +34,6 @@
 2026-09-23T20:13Z@c8897497:
 - Blockers: NO BLOCKERS
 - Where: crates/core/src/restack.rs, crates/core/src/journal.rs
-- What: Resolve conflicts inside `stack` (stop, let the user resolve, `stack continue`) instead of handing off to `git rebase`.
 - What: Replay merge commits.
 - What: Deferred signing until push (see IDEAS.md), as an option.
 - What: gc protection for commits of branches `stack` deletes (moved branches are covered by their reflogs).
