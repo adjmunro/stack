@@ -165,6 +165,12 @@ enum Command {
         /// Branch to land on [default: the branch this worktree follows].
         branch: Option<String>,
     },
+    /// List commits you've been on that no branch, tag, or archive reaches any more.
+    Lost {
+        /// How many to show.
+        #[arg(short = 'n', long, default_value_t = 20)]
+        limit: usize,
+    },
     /// Revert the latest stack command.
     Undo,
     /// Re-apply the most recently undone command.
@@ -487,6 +493,29 @@ fn run(cli: &Cli) -> Result<()> {
             );
             note_follower_syncs(&workspace)?;
         }
+        Command::Lost { limit } => {
+            let lost = workspace.lost(*limit)?;
+            let human = if lost.is_empty() {
+                "Nothing lost.".to_owned()
+            } else {
+                let mut lines: Vec<String> = lost
+                    .iter()
+                    .map(|commit| {
+                        let how = commit.how.split(':').next().unwrap_or_default();
+                        let seen_on = commit.seen_on.trim_start_matches("refs/heads/");
+                        format!(
+                            "{} {} ({seen_on}, {}: {how})",
+                            short(&commit.commit),
+                            commit.summary,
+                            ago(commit.seen_at)
+                        )
+                    })
+                    .collect();
+                lines.push("Restore one with: git branch <name> <commit>".to_owned());
+                lines.join("\n")
+            };
+            print(to_value(&lost)?, human);
+        }
         Command::Undo => {
             let undone = workspace.undo()?;
             note_follower_syncs(&workspace)?;
@@ -686,6 +715,22 @@ fn note_follower_syncs(workspace: &Workspace) -> Result<()> {
         }
     }
     Ok(())
+}
+
+/// "5 minutes ago", "3 hours ago", "2 days ago".
+fn ago(seconds_since_epoch: i64) -> String {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |elapsed| elapsed.as_secs() as i64);
+    let elapsed = (now - seconds_since_epoch).max(0);
+    let (count, unit) = match elapsed {
+        0..60 => return "just now".to_owned(),
+        60..3_600 => (elapsed / 60, "minute"),
+        3_600..86_400 => (elapsed / 3_600, "hour"),
+        _ => (elapsed / 86_400, "day"),
+    };
+    let plural = if count == 1 { "" } else { "s" };
+    format!("{count} {unit}{plural} ago")
 }
 
 fn describe_push(pushed: &Pushed) -> String {
