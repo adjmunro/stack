@@ -126,3 +126,10 @@
 - Detail: Replays merge trees (`git merge-tree --write-tree --merge-base=<tree> <tree> <tree>`), so previews (`stack check`) create no commits and never sign. Requires a git that accepts trees there (2.45+ is known to).
 - Detail: A restack reports every conflicting branch and the branches blocked behind each; independent stacks still restack.
 - Reason: Passive conflict checks (IDEAS) must be safe to run often: no signing prompts, no refs, no journal. They still write unreferenced tree objects, which `git gc` removes.
+
+2026-09-24T07:59Z@72b3919e
+- Category: push
+- Detail: `stack push` pushes the line (see glossary) to the same branch names in one `git push --porcelain`, with `--force-with-lease=<branch>:<last fetched value>` per branch (empty: must not exist remotely). The user's `pre-push` hook runs.
+- Detail: Remote: explicit, else the branch's upstream remote, else `origin`, else the only remote. Upstreams are set only for branches without one; pushing to a second remote (a backup) changes nothing locally.
+- Detail: A branch whose upstream has a different name is refused. Rejections (e.g. stale lease) are reported per branch and fail the command.
+- Reason: Leases make force-pushing restacked branches safe: a remote branch someone else changed since the last fetch is never overwritten.
