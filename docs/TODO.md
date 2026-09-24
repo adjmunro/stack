@@ -37,12 +37,6 @@
 - What: Replay merge commits.
 - What: Deferred signing until push (see IDEAS.md), as an option.
 - What: gc protection for commits of branches `stack` deletes (moved branches are covered by their reflogs).
-- What: Extend property tests to plain-git moves between `stack` calls, and to conflicting stacks.
-
-2026-09-23T10:37Z@507992a:
-- Blockers: NO BLOCKERS
-- Where: crates/testkit
-- What: Fixture builder for stacks/branch graphs.
 
 
 ---
