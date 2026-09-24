@@ -7,9 +7,9 @@ use std::process::ExitCode;
 use clap::{Parser, Subcommand};
 use serde_json::{Value, to_value};
 use stack_core::{
-    CommitReview, Conflict, Direction, Error, Head, MarkKind, Marked, Node, Operation,
-    OperationState, Outcome, PushOutcome, Pushed, RecoveryOutcome, RestackPreview, Restacked, Role,
-    Scope, Source, Step, Tree, Workspace,
+    CommitReview, Conflict, Direction, Error, FollowPosition, FollowerSync, Head, MarkKind, Marked,
+    Node, Operation, OperationState, Outcome, PushOutcome, Pushed, RecoveryOutcome, RestackPreview,
+    Restacked, Role, Scope, Source, Step, SyncOutcome, Tree, Workspace, Worktree,
 };
 
 type Result<T, E = Box<dyn std::error::Error>> = std::result::Result<T, E>;
@@ -157,6 +157,14 @@ enum Command {
         #[arg(long, value_enum)]
         kind: Option<KindArg>,
     },
+    /// Manage worktrees: hidden sibling directories, and followers of branches checked out elsewhere.
+    #[command(subcommand)]
+    Worktree(WorktreeCommand),
+    /// Land this follower's commits on the branch it follows, moving the worktree that has it checked out along.
+    Land {
+        /// Branch to land on [default: the branch this worktree follows].
+        branch: Option<String>,
+    },
     /// Revert the latest stack command.
     Undo,
     /// Re-apply the most recently undone command.
@@ -184,6 +192,21 @@ impl From<KindArg> for MarkKind {
             KindArg::Flagged => MarkKind::Flagged,
         }
     }
+}
+
+#[derive(Subcommand)]
+enum WorktreeCommand {
+    /// Add a worktree for a branch; a follower if the branch is checked out elsewhere.
+    Add {
+        branch: String,
+        /// Where to put it [default: a hidden sibling of the main worktree, .<repo>-<branch>].
+        #[arg(long)]
+        path: Option<PathBuf>,
+    },
+    /// List worktrees and what followers follow.
+    List,
+    /// Bring followers up to date with their branches.
+    Sync,
 }
 
 #[derive(Subcommand)]
@@ -270,6 +293,7 @@ fn run(cli: &Cli) -> Result<()> {
             let branch = branch_or_current(&workspace, branch.as_deref())?;
             let restacked = workspace.restack(&branch)?;
             print(to_value(&restacked)?, describe_restack(&restacked));
+            note_follower_syncs(&workspace)?;
             if !restacked.conflicts.is_empty() {
                 return Err("restack stopped at a conflict".into());
             }
@@ -285,6 +309,7 @@ fn run(cli: &Cli) -> Result<()> {
             let branch = branch_or_current(&workspace, branch.as_deref())?;
             let restacked = workspace.move_branch(&branch, onto)?;
             print(to_value(&restacked)?, describe_restack(&restacked));
+            note_follower_syncs(&workspace)?;
             if !restacked.conflicts.is_empty() {
                 return Err("move stopped at a conflict".into());
             }
@@ -413,8 +438,58 @@ fn run(cli: &Cli) -> Result<()> {
                 format!("Removed {removed} mark{plural}"),
             );
         }
+        Command::Worktree(WorktreeCommand::Add { branch, path }) => {
+            let worktree = workspace.add_worktree(branch, path.as_deref())?;
+            let human = match &worktree.follows {
+                Some(_) => format!(
+                    "Created follower of {branch} at {} ({branch} is checked out elsewhere)",
+                    worktree.path.display()
+                ),
+                None => format!(
+                    "Created worktree for {branch} at {}",
+                    worktree.path.display()
+                ),
+            };
+            print(to_value(&worktree)?, human);
+        }
+        Command::Worktree(WorktreeCommand::List) => {
+            let worktrees = workspace.worktrees()?;
+            let lines: Vec<String> = worktrees.iter().map(describe_worktree).collect();
+            print(to_value(&worktrees)?, lines.join("\n"));
+        }
+        Command::Worktree(WorktreeCommand::Sync) => {
+            let synced = workspace.sync_followers()?;
+            let human = if synced.is_empty() {
+                "No followers.".to_owned()
+            } else {
+                synced
+                    .iter()
+                    .map(describe_sync)
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            };
+            print(to_value(&synced)?, human);
+        }
+        Command::Land { branch } => {
+            let landed = workspace.land(branch.as_deref())?;
+            let plural = if landed.commits == 1 { "" } else { "s" };
+            let holder = landed
+                .holder
+                .as_ref()
+                .map(|holder| format!("; moved {} along", holder.display()))
+                .unwrap_or_default();
+            print(
+                to_value(&landed)?,
+                format!(
+                    "Landed {} commit{plural} on {}{holder}",
+                    landed.commits, landed.branch
+                ),
+            );
+            note_follower_syncs(&workspace)?;
+        }
         Command::Undo => {
             let undone = workspace.undo()?;
+            note_follower_syncs(&workspace)?;
             print(
                 to_value(&undone)?,
                 format!("Undid #{}: {}", undone.id, undone.description),
@@ -422,6 +497,7 @@ fn run(cli: &Cli) -> Result<()> {
         }
         Command::Redo => {
             let redone = workspace.redo()?;
+            note_follower_syncs(&workspace)?;
             print(
                 to_value(&redone)?,
                 format!("Redid #{}: {}", redone.id, redone.description),
@@ -570,6 +646,46 @@ fn describe_review(review: &[CommitReview]) -> String {
         })
         .collect();
     lines.join("\n")
+}
+
+fn describe_worktree(worktree: &Worktree) -> String {
+    let marker = if worktree.current { "* " } else { "" };
+    let path = worktree.path.display();
+    match (&worktree.branch, &worktree.follows, &worktree.head) {
+        (Some(branch), _, _) => format!("{marker}{path} {branch}"),
+        (None, Some(following), _) => {
+            let position = match following.position {
+                FollowPosition::UpToDate => "up to date",
+                FollowPosition::Behind => "behind; run `stack worktree sync`",
+                FollowPosition::Ahead => "has commits; run `stack land`",
+                FollowPosition::Orphaned => "its branch is gone",
+            };
+            format!("{marker}{path} following {} ({position})", following.branch)
+        }
+        (None, None, Some(head)) => format!("{marker}{path} detached at {}", short(head)),
+        (None, None, None) => format!("{marker}{path}"),
+    }
+}
+
+fn describe_sync(sync: &FollowerSync) -> String {
+    let path = sync.path.display();
+    match &sync.outcome {
+        SyncOutcome::Moved { to, .. } => {
+            format!("Moved follower {path} to {} ({})", sync.branch, short(to))
+        }
+        SyncOutcome::UpToDate => format!("{path} is up to date with {}", sync.branch),
+        SyncOutcome::Skipped { reason } => format!("Left {path}: {reason}"),
+    }
+}
+
+/// Syncs followers after a command moved branches, noting on stderr any that moved or were left behind.
+fn note_follower_syncs(workspace: &Workspace) -> Result<()> {
+    for sync in workspace.sync_followers()? {
+        if !matches!(sync.outcome, SyncOutcome::UpToDate) {
+            eprintln!("note: {}", describe_sync(&sync));
+        }
+    }
+    Ok(())
 }
 
 fn describe_push(pushed: &Pushed) -> String {
