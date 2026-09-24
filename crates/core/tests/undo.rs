@@ -161,3 +161,43 @@ fn oplog_records_kinds_states_and_changes() {
     assert_eq!(trunk.changes[0].name, "refs/stack/trunks/develop");
     assert_eq!(trunk.changes[0].old, None);
 }
+
+#[test]
+fn undo_to_takes_the_repository_back_to_before_a_command() {
+    let fixture = repo();
+    grow(&fixture, "a", "develop");
+    grow(&fixture, "b", "a");
+    fixture.git(&["switch", "--quiet", "develop"]);
+    fixture.commit("later.txt", "later", "feat: later");
+    let before = fixture.snapshot();
+    let workspace = workspace(&fixture);
+    workspace.pin("a", None).unwrap();
+    workspace.pin("b", None).unwrap();
+    workspace.restack("develop").unwrap();
+    let first = workspace
+        .oplog(10)
+        .unwrap()
+        .into_iter()
+        .find(|operation| operation.description == "pin a on develop")
+        .unwrap();
+
+    let undone = workspace.undo_to(first.id).unwrap();
+
+    let descriptions: Vec<&str> = undone
+        .iter()
+        .map(|operation| operation.description.as_str())
+        .collect();
+    assert_eq!(
+        descriptions,
+        ["restack develop", "pin b on a", "pin a on develop"]
+    );
+    let diff = before.diff(&fixture.snapshot());
+    assert!(
+        diff.refs.keys().all(|name| name == "refs/stack/keep"),
+        "{diff}"
+    );
+    assert!(matches!(
+        workspace.undo_to(first.id),
+        Err(Error::NothingToUndo)
+    ));
+}

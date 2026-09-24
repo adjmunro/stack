@@ -141,6 +141,14 @@ impl Journal {
         self.reapply(git, OperationKind::Undo, &target, updates)
     }
 
+    /// The command [`Self::undo`] would revert next, if any.
+    pub(crate) fn next_undo(&self) -> Result<Option<Operation>, Error> {
+        Ok(self
+            .read(|store| store.undo_target())?
+            .flatten()
+            .map(operation))
+    }
+
     /// Re-applies the most recently undone command, if no command has run since. Returns that command.
     ///
     /// # Errors

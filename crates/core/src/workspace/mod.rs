@@ -126,6 +126,26 @@ impl Workspace {
         self.journal.undo(&*self.git)
     }
 
+    /// Undoes every command from `id` on, newest first, taking the repository back to before command `id`. Returns
+    /// them in the order undone.
+    ///
+    /// # Errors
+    /// [`Error::NothingToUndo`] if no command from `id` on is waiting to be undone; otherwise as [`Self::undo`],
+    /// stopping at the first command that can't be (those already undone stay undone).
+    pub fn undo_to(&self, id: i64) -> Result<Vec<Operation>, Error> {
+        let mut undone = Vec::new();
+        while let Some(next) = self.journal.next_undo()? {
+            if next.id < id {
+                break;
+            }
+            undone.push(self.undo()?);
+        }
+        if undone.is_empty() {
+            return Err(Error::NothingToUndo);
+        }
+        Ok(undone)
+    }
+
     /// Re-applies the most recently undone command, as long as no command has run since. Returns that command.
     ///
     /// # Errors
