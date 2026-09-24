@@ -227,6 +227,7 @@ impl Workspace {
             worktree: Some(holder.path.clone()),
             from: tip.clone(),
             to: head.clone(),
+            index_only: false,
         });
         let held = checkout.map(|checkout| (branch.as_str(), checkout));
         self.journal.transact_with(

@@ -131,6 +131,21 @@ pub enum Error {
     #[error("invalid lint rule: {rule}")]
     InvalidLintRule { rule: String },
 
+    /// HEAD isn't on a branch.
+    #[error("HEAD is detached; check out a branch first")]
+    DetachedHead,
+
+    #[error("nothing is staged; `git add` the changes to amend with")]
+    NothingStaged,
+
+    /// `revision` isn't a commit of the current branch or of the branches rootward of it (up to the trunk).
+    #[error("{revision} isn't in this stack")]
+    NotInStack { revision: String },
+
+    /// Amending `commit` conflicts in `paths`, directly or while replaying what comes after it.
+    #[error("amending {} conflicts in {}", &commit[..7.min(commit.len())], paths.join(", "))]
+    AmendConflict { commit: String, paths: Vec<String> },
+
     #[error("{name} is already archived")]
     AlreadyArchived { name: String },
 

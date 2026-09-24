@@ -82,19 +82,17 @@ impl Journal {
     ) -> Result<i64, Error> {
         let checkout = match holder {
             Some((branch, checkout)) => {
-                plan_checkout(git, &updates, Some(branch))?;
+                refuse_checked_out_elsewhere(git, &updates, Some(branch))?;
                 Some(checkout)
             }
-            None => plan_checkout(git, &updates, None)?,
+            None => plan_checkout(git, &updates)?,
         };
         updates.extend(keep_update(git, &updates)?);
         let mut guard = self.store(true)?.expect("store created");
         let store = guard.as_mut().expect("store opened");
         let id = store.begin(kind, description, target, &updates, checkout.as_ref())?;
         if let Some(checkout) = &checkout {
-            if let Err(error) =
-                git.checkout(checkout.worktree.as_deref(), &checkout.from, &checkout.to)
-            {
+            if let Err(error) = move_worktree(git, checkout, false) {
                 store.finish(id, OperationState::Failed)?;
                 return Err(error);
             }
@@ -205,7 +203,33 @@ impl Journal {
             "redo"
         };
         let description = format!("{verb} #{}: {}", target.id, target.description);
-        self.transact(git, kind, &description, Some(target.id), updates)?;
+        // An index-only operation (e.g. amending staged changes into a commit) is reverted the same way: the index
+        // goes back to what was staged, and the working tree stays as it is.
+        let index_only = target
+            .checkout
+            .as_ref()
+            .filter(|checkout| checkout.index_only);
+        let holder = match (index_only, git.head()?) {
+            (Some(checkout), crate::Head::Branch { name, .. }) => {
+                let to = if kind == OperationKind::Undo {
+                    &checkout.from
+                } else {
+                    &checkout.to
+                };
+                let checkout = Checkout {
+                    worktree: None,
+                    from: git.write_index_tree()?,
+                    to: to.clone(),
+                    index_only: true,
+                };
+                Some((name, checkout))
+            }
+            _ => None,
+        };
+        let holder = holder
+            .as_ref()
+            .map(|(name, checkout)| (name.as_str(), checkout.clone()));
+        self.transact_with(git, kind, &description, Some(target.id), updates, holder)?;
         let mut target = operation(target.clone());
         target.undone = kind == OperationKind::Undo;
         Ok(target)
@@ -233,11 +257,13 @@ impl Journal {
 
 /// The move of this worktree needed because `updates` move its checked-out branch, if they do. Refuses branches
 /// checked out in other worktrees, except `held_elsewhere`, whose move the caller arranges.
-fn plan_checkout(
+/// Refuses `updates` that move a branch checked out in another worktree, except `held_elsewhere`, whose move the
+/// caller arranges.
+fn refuse_checked_out_elsewhere(
     git: &dyn GitRepo,
     updates: &[RefUpdate],
     held_elsewhere: Option<&str>,
-) -> Result<Option<Checkout>, Error> {
+) -> Result<(), Error> {
     let mut elsewhere = git.checked_out_elsewhere()?;
     elsewhere.retain(|branch| Some(branch.as_str()) != held_elsewhere);
     if let Some(update) = updates.iter().find(|update| {
@@ -249,6 +275,11 @@ fn plan_checkout(
         let branch = update.name.trim_start_matches("refs/heads/").to_owned();
         return Err(Error::CheckedOutElsewhere { branch });
     }
+    Ok(())
+}
+
+fn plan_checkout(git: &dyn GitRepo, updates: &[RefUpdate]) -> Result<Option<Checkout>, Error> {
+    refuse_checked_out_elsewhere(git, updates, None)?;
     let crate::Head::Branch {
         name,
         commit: Some(commit),
@@ -275,7 +306,22 @@ fn plan_checkout(
         worktree: None,
         from: commit,
         to: new.clone(),
+        index_only: false,
     }))
+}
+
+/// Moves a checkout's worktree (or just its index) from `from` to `to`, or back if `reverse`.
+fn move_worktree(git: &dyn GitRepo, checkout: &Checkout, reverse: bool) -> Result<(), Error> {
+    let (from, to) = if reverse {
+        (&checkout.to, &checkout.from)
+    } else {
+        (&checkout.from, &checkout.to)
+    };
+    if checkout.index_only {
+        git.set_index(to)
+    } else {
+        git.checkout(checkout.worktree.as_deref(), from, to)
+    }
 }
 
 /// An update to [`KEEP`] adding every metadata blob `updates` stop referencing, if any are new to it. Other refs
@@ -331,13 +377,8 @@ fn resolve_pending(
     } else if all_old {
         // The working tree may already have moved ahead of the refs; move it back.
         if let Some(checkout) = &record.checkout {
-            let worktree = checkout.worktree.as_deref();
-            let moved = git.index_matches(worktree, &checkout.to)?;
-            if moved
-                && git
-                    .checkout(worktree, &checkout.to, &checkout.from)
-                    .is_err()
-            {
+            let moved = git.index_matches(checkout.worktree.as_deref(), &checkout.to)?;
+            if moved && move_worktree(git, checkout, true).is_err() {
                 return Ok(RecoveryOutcome::Inconsistent);
             }
         }
@@ -475,6 +516,12 @@ mod tests {
         }
         fn checkout(&self, worktree: Option<&Path>, from: &str, to: &str) -> Result<(), Error> {
             self.inner.checkout(worktree, from, to)
+        }
+        fn write_index_tree(&self) -> Result<String, Error> {
+            self.inner.write_index_tree()
+        }
+        fn set_index(&self, tree: &str) -> Result<(), Error> {
+            self.inner.set_index(tree)
         }
         fn worktrees(&self) -> Result<Vec<crate::git::WorktreeInfo>, Error> {
             self.inner.worktrees()
@@ -768,6 +815,7 @@ mod tests {
             worktree: Some(holder.clone()),
             from: old,
             to: new,
+            index_only: false,
         };
         let crashed = catch_unwind(AssertUnwindSafe(|| {
             let held = Some(("develop", checkout));

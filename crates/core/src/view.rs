@@ -494,6 +494,19 @@ pub enum LintProblem {
     NoMatch { pattern: String },
 }
 
+/// The result of [`crate::Workspace::amend_into`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct Amended {
+    /// The commit amended.
+    pub commit: String,
+    /// What it became.
+    pub rewritten: String,
+    /// The branch it belongs to.
+    pub branch: String,
+    /// Every branch moved, the amended one first.
+    pub restacked: Restacked,
+}
+
 /// The result of [`crate::Workspace::push`].
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Pushed {

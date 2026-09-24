@@ -191,6 +191,19 @@ impl Workspace {
         description: &str,
     ) -> Result<Restacked, Error> {
         let plan = crate::restack::plan(&*self.git, resolution, target, Mode::Apply)?;
+        self.apply_plan(metadata, resolution, plan, description, None)
+    }
+
+    /// Applies a planned restack as one journalled command called `description`, moving `holder`'s worktree (or
+    /// index) along if given.
+    pub(super) fn apply_plan(
+        &self,
+        metadata: &Metadata,
+        resolution: &Resolution,
+        plan: crate::restack::Plan,
+        description: &str,
+        holder: Option<(&str, Checkout)>,
+    ) -> Result<Restacked, Error> {
         let mut updates: Vec<RefUpdate> = plan
             .moves
             .iter()
@@ -229,12 +242,13 @@ impl Workspace {
         let outcome = if updates.is_empty() {
             Outcome::Unchanged
         } else {
-            self.journal.transact(
+            self.journal.transact_with(
                 &*self.git,
                 OperationKind::Command,
                 description,
                 None,
                 updates,
+                holder,
             )?;
             Outcome::Changed
         };

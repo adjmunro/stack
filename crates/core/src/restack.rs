@@ -45,9 +45,9 @@ pub(crate) struct Plan {
 
 /// Where a branch's commits land: a commit (when applying) and its tree.
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct Base {
-    commit: Option<String>,
-    tree: String,
+pub(crate) struct Base {
+    pub commit: Option<String>,
+    pub tree: String,
 }
 
 /// Plans restacking `target` and every branch leafward of it. A trunk target itself stays put.
@@ -55,6 +55,28 @@ pub(crate) fn plan(
     git: &dyn GitRepo,
     resolution: &Resolution,
     target: &str,
+    mode: Mode,
+) -> Result<Plan, Error> {
+    plan_from(git, resolution, target, None, mode)
+}
+
+/// As [`plan`], but with `target` already rewritten to commit `rewritten` (e.g. by an amend): it moves there, and
+/// every branch leafward of it is restacked onto it.
+pub(crate) fn plan_after(
+    git: &dyn GitRepo,
+    resolution: &Resolution,
+    target: &str,
+    rewritten: &str,
+    mode: Mode,
+) -> Result<Plan, Error> {
+    plan_from(git, resolution, target, Some(rewritten), mode)
+}
+
+fn plan_from(
+    git: &dyn GitRepo,
+    resolution: &Resolution,
+    target: &str,
+    rewritten: Option<&str>,
     mode: Mode,
 ) -> Result<Plan, Error> {
     let mut children: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
@@ -65,16 +87,39 @@ pub(crate) fn plan(
     }
     let mut plan = Plan::default();
     let mut new_bases: BTreeMap<String, Base> = BTreeMap::new();
-    let mut queue: VecDeque<&str> = if resolution.branches[target].role == Role::Trunk {
-        children
-            .get(target)
-            .into_iter()
-            .flatten()
-            .copied()
-            .collect()
-    } else {
-        VecDeque::from([target])
-    };
+    if let Some(rewritten) = rewritten {
+        let entry = &resolution.branches[target];
+        new_bases.insert(
+            target.to_owned(),
+            Base {
+                commit: Some(rewritten.to_owned()),
+                tree: git.commit(rewritten)?.tree,
+            },
+        );
+        plan.moves.push(Move {
+            branch: target.to_owned(),
+            onto: entry
+                .parent
+                .as_ref()
+                .map(|parent| parent.name.clone())
+                .unwrap_or_default(),
+            old: entry.tip.clone(),
+            new: Some(rewritten.to_owned()),
+            replayed: 0,
+            dropped: 0,
+        });
+    }
+    let mut queue: VecDeque<&str> =
+        if rewritten.is_some() || resolution.branches[target].role == Role::Trunk {
+            children
+                .get(target)
+                .into_iter()
+                .flatten()
+                .copied()
+                .collect()
+        } else {
+            VecDeque::from([target])
+        };
     // Parents first: each branch is queued only after its parent has been planned.
     while let Some(branch) = queue.pop_front() {
         let entry = &resolution.branches[branch];
@@ -145,7 +190,7 @@ pub(crate) fn plan(
 
 /// Replays the commits after `offshoot` up to `tip` onto `onto`. Returns where they landed and how many commits were
 /// replayed and dropped (those whose changes are already in `onto`), or the first conflict.
-fn replay(
+pub(crate) fn replay(
     git: &dyn GitRepo,
     branch: &str,
     tip: &str,

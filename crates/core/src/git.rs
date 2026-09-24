@@ -59,6 +59,8 @@ pub(crate) struct Checkout {
     pub worktree: Option<PathBuf>,
     pub from: String,
     pub to: String,
+    /// Move only the index (to tree `to`), leaving the working tree as it is; `from` is the index's tree before.
+    pub index_only: bool,
 }
 
 /// The parts of a commit restack needs.
@@ -204,6 +206,15 @@ pub(crate) trait GitRepo: Send + Sync {
     /// (`git read-tree -m -u`), without touching refs. Local changes to files that differ between the two are refused,
     /// without changes; others are carried along.
     fn checkout(&self, worktree: Option<&Path>, from: &str, to: &str) -> Result<(), Error>;
+
+    /// This worktree's index as a tree (`git write-tree`).
+    ///
+    /// # Errors
+    /// [`Error::Git`] if the index has unresolved conflicts.
+    fn write_index_tree(&self) -> Result<String, Error>;
+
+    /// Sets this worktree's index to `tree` (`git read-tree`), leaving the working tree as it is.
+    fn set_index(&self, tree: &str) -> Result<(), Error>;
 
     /// Every worktree of this repository, the main one first.
     fn worktrees(&self) -> Result<Vec<WorktreeInfo>, Error>;
@@ -868,6 +879,15 @@ impl GitRepo for GixRepo {
             b"",
         )
         .map(|_| ())
+    }
+
+    fn write_index_tree(&self) -> Result<String, Error> {
+        let tree = run_ok(&mut self.git(&["write-tree"]), b"")?;
+        Ok(String::from_utf8_lossy(&tree).trim().to_owned())
+    }
+
+    fn set_index(&self, tree: &str) -> Result<(), Error> {
+        run_ok(&mut self.git(&["read-tree", tree]), b"").map(|_| ())
     }
 
     fn worktrees(&self) -> Result<Vec<WorktreeInfo>, Error> {

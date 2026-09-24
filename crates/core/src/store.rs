@@ -11,9 +11,9 @@ use rusqlite::{Connection, params};
 use crate::git::{Checkout, RefUpdate};
 use crate::{Error, MarkKind, OperationKind, OperationState, ReviewMark};
 
-const SCHEMA_VERSION: i64 = 5;
+const SCHEMA_VERSION: i64 = 6;
 
-const MIGRATIONS: [&str; 5] = [
+const MIGRATIONS: [&str; 6] = [
     r#"
     CREATE TABLE operation (
         id          INTEGER PRIMARY KEY,
@@ -58,6 +58,9 @@ const MIGRATIONS: [&str; 5] = [
         key   TEXT PRIMARY KEY,
         value TEXT NOT NULL
     );
+"#,
+    r#"
+    ALTER TABLE operation ADD COLUMN checkout_index_only INTEGER NOT NULL DEFAULT 0;
 "#,
 ];
 
@@ -134,8 +137,9 @@ impl Store {
         transaction
             .execute(
                 "INSERT INTO operation
-                     (kind, description, target, state, started_at, checkout_from, checkout_to, checkout_worktree)
-                 VALUES (?1, ?2, ?3, 'pending', ?4, ?5, ?6, ?7)",
+                     (kind, description, target, state, started_at, checkout_from, checkout_to, checkout_worktree,
+                  checkout_index_only)
+                 VALUES (?1, ?2, ?3, 'pending', ?4, ?5, ?6, ?7, ?8)",
                 params![
                     kind_name(kind),
                     description,
@@ -143,7 +147,8 @@ impl Store {
                     now(),
                     checkout.map(|checkout| &checkout.from),
                     checkout.map(|checkout| &checkout.to),
-                    checkout.and_then(|checkout| checkout.worktree.as_ref()).map(|path| path.to_string_lossy())
+                    checkout.and_then(|checkout| checkout.worktree.as_ref()).map(|path| path.to_string_lossy()),
+                    checkout.is_some_and(|checkout| checkout.index_only)
                 ],
             )
             .map_err(Error::store)?;
@@ -215,7 +220,7 @@ impl Store {
     fn query(&self, clause: &str, parameters: impl rusqlite::Params) -> Result<Vec<Record>, Error> {
         let sql = format!(
             "SELECT id, kind, description, target, state, undone, started_at, checkout_from, checkout_to,
-                    checkout_worktree
+                    checkout_worktree, checkout_index_only
              FROM operation {clause}"
         );
         let mut statement = self.connection.prepare(&sql).map_err(Error::store)?;
@@ -237,7 +242,13 @@ impl Store {
                         let from_to = row
                             .get::<_, Option<String>>(7)?
                             .zip(row.get::<_, Option<String>>(8)?);
-                        from_to.map(|(from, to)| Checkout { worktree, from, to })
+                        let index_only: bool = row.get(10)?;
+                        from_to.map(|(from, to)| Checkout {
+                            worktree,
+                            from,
+                            to,
+                            index_only,
+                        })
                     },
                 })
             })
