@@ -30,6 +30,9 @@ You should remove bullets point when they are or become complete and fully imple
 - Import filtering for diffs (Or some kind of “in `*.kt` ignore lines that start with `import *`)
 - Indexer / find usages, implementation, declaration, injection etc
 - I _badly_ need better worktree implementations. Or perhaps the GUI can provide a better facade? I need to be able to more freely switch between worktrees and branches owned by worktrees. The no-mulitple-workspace-checkouts thing drives me nutts. Maybe i need a bare repo and make everything a worktree or something.
+  - Default worktree location: sibling directories of the repo, named repo name + branch as usual, but prefixed with `.` so they're hidden from a plain `ls`.
+  - Follower worktrees (borrow-checker style): the worktree that has the branch checked out owns it; other worktrees (and plain detached HEADs) follow it as read-only, detached, and move with each new commit on the branch. A "follower HEAD" / observer.
+  - A write mutex between worktrees: still one writer and any number of readers, but any worktree can claim the write lock when needed, and the current holder becomes a read-only follower that moves with the tip. Maybe you only claim the lock to commit and then release it, unless you're the main workspace.
 - Defer local commit signing until push.
 - Perfect undo & redo operations with extensive history.
 - Find lost HEADs
