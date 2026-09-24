@@ -144,3 +144,11 @@
 - Category: review marks
 - Detail: Marks (reviewed, tested, flagged with an optional note) are keyed by the commit's stable `git patch-id` (`patch:<id>`), or by commit id for merges and empty commits (`commit:<sha>`). Stored in the local SQLite store (schema v3), outside the op log.
 - Reason: A patch-id changes only when the commit's diff changes, so marks survive restacks, rebases, and rewording, and lapse exactly when the reviewed change changes. Marks are personal, so they aren't shared through refs.
+
+2026-09-24T08:16Z@ff9c9c61
+- Category: worktrees
+- Detail: Default worktree path: a hidden sibling of the main worktree, `.<repo>-<branch>` (`/` → `-`).
+- Detail: A worktree added for a branch checked out elsewhere is a follower: detached at the tip, registered in the store (`follower` table, schema v4). Followers are synced after `stack` moves branches and on `stack worktree sync`, but only when their `HEAD` is a version of the branch (an ancestor of its tip, or a former tip); a follower with commits of its own is left for `stack land`.
+- Detail: `land` fast-forwards the branch to the follower's `HEAD` in one journalled transaction, moving the holder worktree's files first (`git read-tree -m -u`, which carries non-clashing local changes and refuses clashing ones). Refused unless the follower's commits sit on the branch's current tip.
+- Detail: The journal records which worktree a checkout moved, so recovery moves that one back.
+- Reason: The main workspace keeps its checkout (no detached HEAD in the IDE) while other worktrees borrow the branch to commit; the fast-forward check guarantees the follower built on exactly what the holder has.

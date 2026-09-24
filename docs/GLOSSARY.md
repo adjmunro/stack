@@ -18,6 +18,9 @@ Canonical vocabulary for the project. Prefer these names in code, schema, and do
 - **Restack**: rebase a branch and everything leafward of it, through limbs, onto its parent's current tip.
 - **Move**: re-parent a branch: replay its own commits onto a new parent, then restack its descendants.
 - **Archive**: put a branch away under `refs/stack/archive/`: out of `git branch` and every `stack` view, kept safe from `gc`, restorable.
+- **Follower**: a worktree detached at a branch that's checked out elsewhere, kept at its tip by `stack`. Read-only in spirit: its own commits reach the branch by landing.
+- **Holder**: the worktree that has a branch checked out.
+- **Land**: fast-forward a branch to a follower's commits, moving the holder's files along.
 - **Check**: a restack preview: which branches would move cleanly, conflict, or be blocked. Changes nothing.
 - **Workspace**: the core facade over one git repo plus `stack` state. Entry point for every surface.
 - **Surface**: a consumer of the core (CLI, GUI, MCP).
