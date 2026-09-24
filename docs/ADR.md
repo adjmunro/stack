@@ -158,3 +158,9 @@
 - Detail: `stack import graphite` reads `.git/.graphite_repo_config` (`trunk` or `trunks`) and `refs/branch-metadata/*` (`parentBranchName`, `parentBranchRevision`), writing trunks and unpinned parent records in one journalled command. Graphite's data is never modified; parents `stack` already records are kept.
 - Detail: The offshoot is Graphite's `parentBranchRevision` if the branch still contains it, else the merge base.
 - Reason: Unpinned records let the commit graph override Graphite where its tracking has drifted, which is the problem that motivated auto-tracking.
+
+2026-09-24T08:35Z@e2484169
+- Category: pull requests
+- Detail: A `Forge` port, with a `gh` CLI adapter run in the current worktree using the user's `gh` login. `stack pr` pushes the line, then per branch: finds its latest pull request; creates one (`gh pr create --head <b> --base <parent> --fill`) if none; retargets an open one whose base isn't the branch's parent; leaves merged/closed ones and rejected pushes alone.
+- Detail: A branch whose parent isn't on the remote is skipped with a reason rather than targeted at a guess.
+- Reason: `gh` handles auth, hosts, and templates; the port keeps other forges and a GUI's own client possible. Tests use a fake `gh` on `PATH`.
