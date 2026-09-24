@@ -42,3 +42,15 @@ fn only_a_branch_s_own_commits_count() {
     assert_eq!(touching(&fixture, &["base.txt"]), "develop");
     assert_eq!(touching(&fixture, &["nowhere.txt"]), "develop");
 }
+
+#[test]
+fn focusing_on_a_branch_keeps_its_line_and_what_is_on_it() {
+    let fixture = stacks();
+    grow(&fixture, "d", "b");
+    let focus = |branch: &str| shape(&workspace(&fixture).tree_around(branch).unwrap());
+
+    assert_eq!(focus("a"), "develop(a(b(d)))");
+    assert_eq!(focus("d"), "develop(a(b(d)))");
+    assert_eq!(focus("c"), "develop(c)");
+    assert_eq!(focus("develop"), "develop(a(b(d)) c)");
+}

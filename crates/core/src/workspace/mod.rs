@@ -258,6 +258,47 @@ impl Workspace {
         })
     }
 
+    /// [`Self::tree`] focused on `branch`: its parents down to its trunk, and everything stacked on it. Other stacks
+    /// are left out.
+    ///
+    /// # Errors
+    /// [`Error::UnknownBranch`].
+    pub fn tree_around(&self, branch: &str) -> Result<Tree, Error> {
+        let resolution = self.resolve()?.1;
+        if !resolution.branches.contains_key(branch) {
+            return Err(Error::UnknownBranch {
+                name: branch.into(),
+            });
+        }
+        let mut keep: std::collections::BTreeSet<String> = resolution
+            .lineage(branch)
+            .into_iter()
+            .map(str::to_owned)
+            .collect();
+        // Everything stacked on it: branches whose lineage passes through it.
+        for name in resolution.branches.keys() {
+            if resolution.lineage(name).contains(&branch) {
+                keep.insert(name.clone());
+            }
+        }
+        let tree = resolution.tree(self.current_branch()?.as_deref());
+        let root = resolution
+            .lineage(branch)
+            .last()
+            .map(|root| root.to_string());
+        let trunks = tree
+            .trunks
+            .into_iter()
+            .filter(|trunk| Some(&trunk.name) == root.as_ref())
+            .map(|trunk| Node {
+                children: prune(trunk.children, &keep),
+                ..trunk
+            })
+            .collect();
+        let unattached = prune(tree.unattached, &keep);
+        Ok(Tree { trunks, unattached })
+    }
+
     /// Marks the existing branch `name` as a trunk. Its role is inferred: a limb if it is stacked on a regular
     /// branch, otherwise a trunk.
     ///
