@@ -78,3 +78,31 @@ fn trunk_alone_has_nothing_to_push() {
 
     assert_eq!(stdout(&stack(&fixture, &["push"])), "Nothing to push.\n");
 }
+
+#[test]
+fn pr_pushes_and_opens_pull_requests_via_gh() {
+    let (fixture, _remote) = repo();
+    fixture.git(&["push", "--quiet", "origin", "develop"]);
+    let bin = fixture.scratch_path("bin");
+    let state = fixture.scratch_path("gh-state");
+    std::fs::create_dir(&bin).unwrap();
+    std::fs::create_dir(&state).unwrap();
+    std::fs::copy(concat!(env!("CARGO_MANIFEST_DIR"), "/../core/tests/fake-gh.sh"), bin.join("gh")).unwrap();
+    let path = format!("{}:{}", bin.display(), std::env::var("PATH").unwrap());
+
+    let output = fixture
+        .command(env!("CARGO_BIN_EXE_stack"))
+        .env("PATH", path)
+        .env("FAKE_GH_DIR", &state)
+        .args(["pr"])
+        .output()
+        .unwrap();
+
+    assert_eq!(
+        stdout(&output),
+        "Pushed feat/a to origin (new)\n\
+         Pushed feat/b to origin (new)\n\
+         Opened #1 for feat/a into develop: https://example.test/pull/1\n\
+         Opened #2 for feat/b into feat/a: https://example.test/pull/2\n"
+    );
+}

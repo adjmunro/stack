@@ -8,8 +8,9 @@ use clap::{Parser, Subcommand};
 use serde_json::{Value, to_value};
 use stack_core::{
     CommitReview, Conflict, Direction, Error, FollowPosition, FollowerSync, Head, MarkKind, Marked,
-    Node, Operation, OperationState, Outcome, PushOutcome, Pushed, RecoveryOutcome, RestackPreview,
-    Restacked, Role, Scope, Source, Step, SyncOutcome, Tree, Workspace, Worktree,
+    Node, Operation, OperationState, Outcome, ProposalAction, ProposedBranch, PushOutcome, Pushed,
+    RecoveryOutcome, RestackPreview, Restacked, Role, Scope, Source, Step, SyncOutcome, Tree,
+    Workspace, Worktree,
 };
 
 type Result<T, E = Box<dyn std::error::Error>> = std::result::Result<T, E>;
@@ -79,21 +80,14 @@ enum Command {
         onto: String,
     },
     /// Push a branch's line: its parents down to the nearest trunk, and the branches on it up to the next trunks.
-    Push {
-        /// Branch whose line to push [default: current branch].
-        branch: Option<String>,
-        /// Only the branch and its parents.
-        #[arg(long, conflicts_with = "leafward")]
-        rootward: bool,
-        /// Only the branch and the branches on it.
+    Push(LineArgs),
+    /// Push a branch's line and open or retarget a pull request for each branch, against its parent (via gh).
+    Pr {
+        #[command(flatten)]
+        line: LineArgs,
+        /// Open new pull requests as drafts.
         #[arg(long)]
-        leafward: bool,
-        /// Carry on past trunks stacked above, to the leaves.
-        #[arg(short, long)]
-        all: bool,
-        /// Remote to push to [default: the branch's upstream remote, else origin, else the only remote].
-        #[arg(long)]
-        remote: Option<String>,
+        draft: bool,
     },
     /// Check out the branch stacked on this one.
     Up {
@@ -199,6 +193,39 @@ impl From<KindArg> for MarkKind {
             KindArg::Reviewed => MarkKind::Reviewed,
             KindArg::Tested => MarkKind::Tested,
             KindArg::Flagged => MarkKind::Flagged,
+        }
+    }
+}
+
+/// Which branches around one branch to cover, and where to push them.
+#[derive(clap::Args)]
+struct LineArgs {
+    /// Branch whose line to cover [default: current branch].
+    branch: Option<String>,
+    /// Only the branch and its parents.
+    #[arg(long, conflicts_with = "leafward")]
+    rootward: bool,
+    /// Only the branch and the branches on it.
+    #[arg(long)]
+    leafward: bool,
+    /// Carry on past trunks stacked above, to the leaves.
+    #[arg(short, long)]
+    all: bool,
+    /// Remote to push to [default: the branch's upstream remote, else origin, else the only remote].
+    #[arg(long)]
+    remote: Option<String>,
+}
+
+impl LineArgs {
+    fn scope(&self) -> Scope {
+        let direction = match (self.rootward, self.leafward) {
+            (true, _) => Direction::Rootward,
+            (_, true) => Direction::Leafward,
+            _ => Direction::Both,
+        };
+        Scope {
+            direction,
+            through_limbs: self.all,
         }
     }
 }
@@ -329,27 +356,9 @@ fn run(cli: &Cli) -> Result<()> {
                 return Err("move stopped at a conflict".into());
             }
         }
-        Command::Push {
-            branch,
-            rootward,
-            leafward,
-            all,
-            remote,
-        } => {
-            let branch = branch_or_current(&workspace, branch.as_deref())?;
-            let direction = match (rootward, leafward) {
-                (true, _) => Direction::Rootward,
-                (_, true) => Direction::Leafward,
-                _ => Direction::Both,
-            };
-            let pushed = workspace.push(
-                &branch,
-                Scope {
-                    direction,
-                    through_limbs: *all,
-                },
-                remote.as_deref(),
-            )?;
+        Command::Push(line) => {
+            let branch = branch_or_current(&workspace, line.branch.as_deref())?;
+            let pushed = workspace.push(&branch, line.scope(), line.remote.as_deref())?;
             print(to_value(&pushed)?, describe_push(&pushed));
             if pushed
                 .branches
@@ -548,6 +557,22 @@ fn run(cli: &Cli) -> Result<()> {
                 lines.push("Nothing to import.".to_owned());
             }
             print(to_value(&imported)?, lines.join("\n"));
+        }
+        Command::Pr { line, draft } => {
+            let branch = branch_or_current(&workspace, line.branch.as_deref())?;
+            let proposed =
+                workspace.propose(&branch, line.scope(), line.remote.as_deref(), *draft)?;
+            let mut lines = vec![describe_push(&proposed.pushed)];
+            lines.extend(proposed.pull_requests.iter().map(describe_proposal));
+            print(to_value(&proposed)?, lines.join("\n"));
+            if proposed
+                .pushed
+                .branches
+                .iter()
+                .any(|branch| branch.outcome == PushOutcome::Rejected)
+            {
+                return Err("some branches were rejected; fetch, restack, and try again".into());
+            }
         }
         Command::Undo => {
             let undone = workspace.undo()?;
@@ -764,6 +789,23 @@ fn ago(seconds_since_epoch: i64) -> String {
     };
     let plural = if count == 1 { "" } else { "s" };
     format!("{count} {unit}{plural} ago")
+}
+
+fn describe_proposal(proposal: &ProposedBranch) -> String {
+    let number = proposal
+        .number
+        .map(|number| format!("#{number}"))
+        .unwrap_or_default();
+    let (branch, base) = (&proposal.branch, &proposal.base);
+    let url = proposal.url.as_deref().unwrap_or_default();
+    match &proposal.action {
+        ProposalAction::Created => format!("Opened {number} for {branch} into {base}: {url}"),
+        ProposalAction::Retargeted { from } => {
+            format!("Retargeted {number} ({branch}) from {from} to {base}")
+        }
+        ProposalAction::UpToDate => format!("{number} ({branch} into {base}) is up to date"),
+        ProposalAction::Skipped { reason } => format!("Skipped {branch}: {reason}"),
+    }
 }
 
 fn describe_push(pushed: &Pushed) -> String {
