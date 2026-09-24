@@ -32,6 +32,9 @@ pub(crate) enum Command {
     Status,
     /// Show trunks and the branches stacked on them.
     Tree {
+        /// Focus on this branch: its parents down to its trunk, and everything stacked on it.
+        #[arg(conflicts_with = "paths")]
+        branch: Option<String>,
         /// Also preview a restack: mark branches that would conflict, or are blocked behind a conflict.
         #[arg(long)]
         check: bool,

@@ -73,11 +73,15 @@ fn run(cli: &Cli) -> Result<()> {
             }
             print(to_value(&status)?, human);
         }
-        Command::Tree { check, paths } => {
-            let tree = if paths.is_empty() {
-                workspace.tree()?
-            } else {
-                workspace.tree_touching(paths)?
+        Command::Tree {
+            branch,
+            check,
+            paths,
+        } => {
+            let tree = match (branch, paths.is_empty()) {
+                (Some(branch), _) => workspace.tree_around(branch)?,
+                (None, true) => workspace.tree()?,
+                (None, false) => workspace.tree_touching(paths)?,
             };
             let preview = if *check {
                 Some(workspace.check(None)?)
