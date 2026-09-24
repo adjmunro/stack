@@ -126,6 +126,7 @@
 - Detail: Replays merge trees (`git merge-tree --write-tree --merge-base=<tree> <tree> <tree>`), so previews (`stack check`) create no commits and never sign. Requires a git that accepts trees there (2.45+ is known to).
 - Detail: A restack reports every conflicting branch and the branches blocked behind each; independent stacks still restack.
 - Reason: Passive conflict checks (IDEAS) must be safe to run often: no signing prompts, no refs, no journal. They still write unreferenced tree objects, which `git gc` removes.
+- Status: tree objects no longer written; see [2026-09-24T12:41Z@e87a43d4]
 
 2026-09-24T07:59Z@72b3919e
 - Category: push
@@ -170,3 +171,8 @@
 - Detail: `stack guard install` makes a `pre-push` hook (in `git rev-parse --git-path hooks`, so `core.hooksPath` is honoured) that runs `<absolute path to stack> guard check-push`. An existing hook moves to `pre-push.before-stack` and runs after the checks pass; uninstall restores it.
 - Detail: Refused: pushing to or deleting a protected branch (root trunks, plus `stack.protect` values), and pushing a branch or bare commit to a branch of another name. A human can allow each by typing the branch name at `/dev/tty`; with no terminal, or `STACK_GUARD_PROMPT=never`, the push is refused.
 - Reason: Agents run plain `git push` with the human's credentials (and admin bypasses). A hook covers every push, not just `stack`'s, and a terminal confirmation is a step an unattended agent can't take. `git push --no-verify` still skips hooks; stronger enforcement needs separate agent credentials (IDEAS).
+
+2026-09-24T12:41Z@e87a43d4
+- Category: restack
+- Detail: `check` runs its merges with `GIT_OBJECT_DIRECTORY` pointed at a temporary directory and the repository's objects as `GIT_ALTERNATE_OBJECT_DIRECTORIES`, deleted afterwards. The repository is left byte-for-byte unchanged.
+- Reason: A GUI may run previews constantly; they shouldn't accumulate loose objects.

@@ -21,10 +21,10 @@
 
 ## Long Horizon Tasks
 
-2026-09-24T07:54Z@d42437b4:
+2026-09-24T12:41Z@e87a43d4:
 - Blockers: NO BLOCKERS
-- Where: crates/core/src/git.rs (GixRepo::merge_trees), crates/core/src/restack.rs
-- What: Run preview merges against a temporary object directory (`GIT_OBJECT_DIRECTORY` + alternates) so `check` writes nothing at all; then show conflict previews in `stack tree`.
+- Where: crates/core/src/resolve.rs, crates/cli/src/main.rs (render)
+- What: Show conflict previews in `stack tree` (e.g. `--check`), now that `check` writes nothing.
 
 2026-09-23T12:31Z@89920ef0:
 - Blockers: NO BLOCKERS
@@ -34,7 +34,7 @@
 2026-09-23T12:31Z@89920ef0:
 - Blockers: NO BLOCKERS
 - Where: crates/core/src/resolve.rs, crates/core/src/git.rs
-- What: Performance: one walk per branch plus pairwise `merge_base`; unrelated histories (e.g. `gh-pages`) walk everything. Consider one shared walk and the commit-graph. Add a benchmark fixture first.
+- What: Performance: one walk per branch plus pairwise `merge_base`; unrelated histories (e.g. `gh-pages`) walk everything. Measured (release build, 600 trunk commits, 60 stacked branches): `tree` 0.1 s, `check` 1.9 s (one `git merge-tree` per commit). Consider one shared walk, the commit-graph, and in-process merges.
 
 2026-09-23T20:13Z@c8897497:
 - Blockers: NO BLOCKERS
