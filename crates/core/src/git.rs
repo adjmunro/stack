@@ -149,6 +149,12 @@ pub(crate) trait GitRepo: Send + Sync {
     /// empty commits have none.
     fn patch_ids(&self, commits: &[String]) -> Result<HashMap<String, String>, Error>;
 
+    /// The stable `git patch-id` of the whole diff from `from` to `to` (as if squashed), or `None` if they're equal.
+    fn diff_patch_id(&self, from: &str, to: &str) -> Result<Option<String>, Error>;
+
+    /// `git fetch --prune <remote>`.
+    fn fetch(&self, remote: &str) -> Result<(), Error>;
+
     /// The reflog of `reference` (e.g. `HEAD`, `refs/heads/main`), oldest first; empty if it has none.
     fn reflog(&self, reference: &str) -> Result<Vec<ReflogEntry>, Error>;
 
@@ -595,6 +601,30 @@ impl GitRepo for GixRepo {
         args.push("--");
         args.extend(paths.iter().map(String::as_str));
         Ok(!run_ok(&mut self.git(&args), b"")?.is_empty())
+    }
+
+    fn diff_patch_id(&self, from: &str, to: &str) -> Result<Option<String>, Error> {
+        let args = [
+            "diff",
+            "--no-color",
+            "--no-ext-diff",
+            "--no-textconv",
+            from,
+            to,
+        ];
+        let diff = run_ok(&mut self.git(&args), b"")?;
+        if diff.is_empty() {
+            return Ok(None);
+        }
+        let id = run_ok(&mut self.git(&["patch-id", "--stable"]), &diff)?;
+        Ok(String::from_utf8_lossy(&id)
+            .split_whitespace()
+            .next()
+            .map(str::to_owned))
+    }
+
+    fn fetch(&self, remote: &str) -> Result<(), Error> {
+        run_ok(&mut self.git(&["fetch", "--quiet", "--prune", remote]), b"").map(|_| ())
     }
 
     fn patch_ids(&self, commits: &[String]) -> Result<HashMap<String, String>, Error> {

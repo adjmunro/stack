@@ -418,6 +418,12 @@ mod tests {
         ) -> Result<std::collections::HashMap<String, String>, Error> {
             self.inner.patch_ids(commits)
         }
+        fn diff_patch_id(&self, from: &str, to: &str) -> Result<Option<String>, Error> {
+            self.inner.diff_patch_id(from, to)
+        }
+        fn fetch(&self, remote: &str) -> Result<(), Error> {
+            self.inner.fetch(remote)
+        }
         fn touches(&self, tip: &str, hidden: &[String], paths: &[String]) -> Result<bool, Error> {
             self.inner.touches(tip, hidden, paths)
         }

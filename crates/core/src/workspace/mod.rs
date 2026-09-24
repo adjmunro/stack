@@ -72,6 +72,8 @@ mod push;
 mod resolving;
 pub use resolving::{ResolveOutcome, Resolving};
 mod restack;
+mod sync;
+pub use sync::{Synced, TrunkSync, TrunkUpdate};
 mod review;
 mod worktrees;
 

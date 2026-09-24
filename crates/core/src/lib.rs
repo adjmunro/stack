@@ -24,4 +24,7 @@ pub use view::{
     Recovered, RecoveryOutcome, RefChange, RestackPreview, Restacked, ReviewMark, Role, Scope,
     Skipped, Source, Status, Step, SyncOutcome, Tree, Worktree,
 };
-pub use workspace::{Environment, Marked, Pinned, ResolveOutcome, Resolving, Workspace};
+pub use workspace::{
+    Environment, Marked, Pinned, ResolveOutcome, Resolving, Synced, TrunkSync, TrunkUpdate,
+    Workspace,
+};
