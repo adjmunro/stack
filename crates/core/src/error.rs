@@ -98,6 +98,20 @@ pub enum Error {
     #[error("{name} has several branches on it: {}; choose one", children.join(", "))]
     SeveralChildren { name: String, children: Vec<String> },
 
+    /// `name` still has branches stacked on it, which would lose their parent.
+    #[error("{name} has branches on it: {}; move or archive them first", children.join(", "))]
+    HasChildren { name: String, children: Vec<String> },
+
+    #[error("{name} is already archived")]
+    AlreadyArchived { name: String },
+
+    #[error("no archived branch called {name}")]
+    NotArchived { name: String },
+
+    /// A branch called `name` exists, so an archived one of that name can't be restored.
+    #[error("a branch called {name} already exists")]
+    BranchExists { name: String },
+
     /// The op log (SQLite) failed.
     #[error("op log: {0}")]
     Store(BoxError),

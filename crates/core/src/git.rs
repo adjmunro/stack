@@ -109,6 +109,9 @@ pub(crate) trait GitRepo: Send + Sync {
     /// empty commits have none.
     fn patch_ids(&self, commits: &[String]) -> Result<HashMap<String, String>, Error>;
 
+    /// Every ref under `prefix` (which must end in `/`) with the object it points at, sorted by name.
+    fn refs(&self, prefix: &str) -> Result<Vec<(String, String)>, Error>;
+
     /// Every ref under `prefix` (which must end in `/`).
     ///
     /// # Errors
@@ -444,6 +447,20 @@ impl GitRepo for GixRepo {
             Err(gix::repository::merge_base::Error::NotFound { .. }) => Ok(None),
             Err(error) => Err(Error::git(error)),
         }
+    }
+
+    fn refs(&self, prefix: &str) -> Result<Vec<(String, String)>, Error> {
+        let repo = self.repo.to_thread_local();
+        let platform = repo.references().map_err(Error::git)?;
+        let mut refs = Vec::new();
+        for reference in platform.prefixed(prefix).map_err(Error::git)? {
+            let reference = reference.map_err(Error::git)?;
+            if let Some(id) = reference.try_id() {
+                refs.push((reference.name().as_bstr().to_string(), id.to_string()));
+            }
+        }
+        refs.sort();
+        Ok(refs)
     }
 
     fn blob_refs(&self, prefix: &str) -> Result<Vec<BlobRef>, Error> {

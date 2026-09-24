@@ -248,6 +248,13 @@ pub enum Step {
     Bottom,
 }
 
+/// A branch put away with [`crate::Workspace::archive`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct Archived {
+    pub name: String,
+    pub commit: String,
+}
+
 /// The result of [`crate::Workspace::push`].
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Pushed {

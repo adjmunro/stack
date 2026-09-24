@@ -16,8 +16,8 @@ mod workspace;
 
 pub use error::Error;
 pub use view::{
-    Conflict, Direction, Head, Moved, Node, Operation, OperationKind, OperationState, Outcome,
-    Parent, PreviewedMove, PushOutcome, Pushed, PushedBranch, Recovered, RecoveryOutcome,
+    Archived, Conflict, Direction, Head, Moved, Node, Operation, OperationKind, OperationState,
+    Outcome, Parent, PreviewedMove, PushOutcome, Pushed, PushedBranch, Recovered, RecoveryOutcome,
     RefChange, RestackPreview, Restacked, Role, Scope, Source, Status, Step, Tree,
 };
 pub use workspace::{Environment, Marked, Pinned, Workspace};

@@ -8,6 +8,7 @@ use std::path::PathBuf;
 use std::sync::{Mutex, MutexGuard};
 
 use crate::git::{GitRepo, RefUpdate};
+use crate::metadata;
 use crate::store::{Record, Store};
 use crate::{
     Error, Operation, OperationKind, OperationState, Recovered, RecoveryOutcome, RefChange,
@@ -223,7 +224,8 @@ fn plan_checkout(
     Ok(Some((commit, new.clone())))
 }
 
-/// An update to [`KEEP`] adding every object `updates` stop referencing from `refs/stack/`, if any are new to it.
+/// An update to [`KEEP`] adding every metadata blob `updates` stop referencing, if any are new to it. Other refs
+/// (branches, archives) hold commits, which their reflogs or the refs themselves protect.
 fn keep_update(git: &dyn GitRepo, updates: &[RefUpdate]) -> Result<Option<RefUpdate>, Error> {
     let current = git.ref_value(KEEP)?;
     let mut kept: BTreeSet<String> = match &current {
@@ -235,8 +237,8 @@ fn keep_update(git: &dyn GitRepo, updates: &[RefUpdate]) -> Result<Option<RefUpd
         updates
             .iter()
             .filter(|update| {
-                update.name.starts_with("refs/stack/")
-                    && update.name != KEEP
+                (update.name.starts_with(metadata::TRUNKS)
+                    || update.name.starts_with(metadata::BRANCHES))
                     && update.old != update.new
             })
             .filter_map(|update| update.old.clone()),
@@ -362,6 +364,9 @@ mod tests {
         }
         fn blob_refs(&self, prefix: &str) -> Result<Vec<crate::git::BlobRef>, Error> {
             self.inner.blob_refs(prefix)
+        }
+        fn refs(&self, prefix: &str) -> Result<Vec<(String, String)>, Error> {
+            self.inner.refs(prefix)
         }
         fn write_blob(&self, data: &[u8]) -> Result<String, Error> {
             self.inner.write_blob(data)

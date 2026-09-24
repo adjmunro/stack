@@ -12,6 +12,8 @@ use crate::{Error, Role};
 
 pub(crate) const TRUNKS: &str = "refs/stack/trunks/";
 pub(crate) const BRANCHES: &str = "refs/stack/branches/";
+/// Archived branches: `refs/stack/archive/<name>` points at the branch's last commit.
+pub(crate) const ARCHIVE: &str = "refs/stack/archive/";
 const VERSION: u32 = 1;
 
 /// A branch marked with `stack trunk add`. `role` is inferred when marked: [`Role::Trunk`] or [`Role::Limb`].
