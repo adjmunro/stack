@@ -18,6 +18,7 @@ Canonical vocabulary for the project. Prefer these names in code, schema, and do
 - **Restack**: rebase a branch and everything leafward of it, through limbs, onto its parent's current tip.
 - **Move**: re-parent a branch: replay its own commits onto a new parent, then restack its descendants.
 - **Chain**: line branches up into one stack in a given order (the serial counterpart of moving several onto one parent).
+- **Amend into**: apply staged changes to an earlier commit of the stack, replaying and restacking what's above it.
 - **Continue / abort**: finish or give up a restack waiting at a conflict that git's rebase stopped on.
 - **Sync**: fetch, fast-forward trunks, archive branches merged into them (rehoming what's on them), and restack.
 - **Merged branch**: one whose work is in its trunk, by merge, rebase, or squash.

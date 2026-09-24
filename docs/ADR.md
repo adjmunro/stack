@@ -189,3 +189,9 @@
 - Detail: `stack sync` fetches (`git fetch --prune`), fast-forwards each root trunk to its remote copy (never merges or resets; ahead or diverged trunks are reported and left), then finds merged branches: tip in the trunk (merge commit or fast-forward, provided the branch ever had commits of its own per its reflog), every own commit's patch-id in the trunk (rebase), or the whole change's patch-id matching one trunk commit (squash).
 - Detail: Branches on merged ones are moved to the nearest unmerged branch or trunk below (a move keeps their own offshoot, so only their commits replay); merged branches are archived, not deleted; then every trunk is restacked. Each step is its own journalled command.
 - Reason: Archiving keeps merged work recoverable, and patch-id matching covers GitHub's squash and rebase merges without asking the forge.
+
+2026-09-24T13:48Z@ee15ed5d
+- Category: amend
+- Detail: `stack amend --into <commit>` takes the staged tree, merges its difference from HEAD into the target commit (`merge-tree` over HEAD's tree), rewrites the target, replays the rest of its branch, and restacks everything leafward of that branch, including the current one. Refused, with nothing changed, on any conflict.
+- Detail: The journal's checkout step can be index-only: the index moves to the new tip (`git read-tree`) and the working tree is left alone. Recovery, undo, and redo move only the index too, restoring the staged tree exactly.
+- Reason: Editing an earlier commit without an interactive rebase, and without disturbing unstaged work, is the base for `absorb`.
