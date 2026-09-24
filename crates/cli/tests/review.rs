@@ -82,3 +82,29 @@ fn lost_lists_amended_away_commits_with_a_restore_hint() {
         Some("Restore one with: git branch <name> <commit>")
     );
 }
+
+#[test]
+fn delta_shows_only_the_real_difference() {
+    let fixture = Fixture::new();
+    fixture.commit("base.txt", "base", "feat: base");
+    stack(&fixture, &["trunk", "add", "develop"]);
+    fixture.git(&["switch", "--quiet", "--create", "a"]);
+    fixture.commit("feature.txt", "the feature", "feat: feature");
+    fixture.git(&["switch", "--quiet", "--create", "x", "develop"]);
+    fixture.commit("noise.txt", "noise", "chore: noise");
+    fixture.git(&["switch", "--quiet", "--create", "b"]);
+    fixture.git(&["cherry-pick", "a"]);
+    fixture.commit("extra.txt", "extra", "feat: extra");
+
+    let net = stdout(&stack(&fixture, &["delta", "a", "b"]));
+    assert!(
+        net.contains("+++ b/extra.txt") && !net.contains("noise.txt"),
+        "{net}"
+    );
+
+    let commits = stdout(&stack(&fixture, &["delta", "a", "--commits"]));
+    assert!(
+        commits.contains("feat: feature") && commits.contains("feat: extra"),
+        "{commits}"
+    );
+}

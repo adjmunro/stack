@@ -7,10 +7,10 @@ use std::process::ExitCode;
 use clap::{Parser, Subcommand};
 use serde_json::{Value, to_value};
 use stack_core::{
-    CommitReview, Conflict, Direction, Error, FollowPosition, FollowerSync, GuardViolation, Head,
-    MarkKind, Marked, Node, Operation, OperationState, Outcome, ProposalAction, ProposedBranch,
-    PushOutcome, Pushed, RecoveryOutcome, RestackPreview, Restacked, Role, Scope, Source, Step,
-    SyncOutcome, Tree, Workspace, Worktree,
+    CommitRange, CommitReview, Conflict, Direction, Error, FollowPosition, FollowerSync,
+    GuardViolation, Head, MarkKind, Marked, Node, Operation, OperationState, Outcome,
+    ProposalAction, ProposedBranch, PushOutcome, Pushed, RecoveryOutcome, RestackPreview,
+    Restacked, Role, Scope, Source, Step, SyncOutcome, Tree, Workspace, Worktree,
 };
 
 type Result<T, E = Box<dyn std::error::Error>> = std::result::Result<T, E>;
@@ -176,6 +176,15 @@ enum Command {
     /// a human confirming at a terminal.
     #[command(subcommand)]
     Guard(GuardCommand),
+    /// Show how two branches' own changes differ, ignoring the difference in their bases.
+    Delta {
+        a: String,
+        /// Branch to compare with [default: current branch].
+        b: Option<String>,
+        /// Compare commit by commit (git range-diff) instead of the net change.
+        #[arg(long)]
+        commits: bool,
+    },
     /// Revert the latest stack command.
     Undo,
     /// Re-apply the most recently undone command.
@@ -649,6 +658,38 @@ fn run(cli: &Cli) -> Result<()> {
                 return Err(
                     "push refused by the stack guard; a human can confirm it at a terminal".into(),
                 );
+            }
+        }
+        Command::Delta { a, b, commits } => {
+            let b = branch_or_current(&workspace, b.as_deref())?;
+            let delta = workspace.delta(a, &b)?;
+            if cli.json {
+                print(to_value(&delta)?, String::new());
+                return Ok(());
+            }
+            let git = |args: &[&str]| -> Result<()> {
+                let status = std::process::Command::new("git")
+                    .arg("-C")
+                    .arg(&directory)
+                    .args(args)
+                    .status()?;
+                if status.success() {
+                    Ok(())
+                } else {
+                    Err(format!("git {} failed", args[0]).into())
+                }
+            };
+            let range = |range: &CommitRange| format!("{}..{}", range.base, range.tip);
+            if *commits {
+                git(&["range-diff", &range(&delta.a), &range(&delta.b)])?;
+            } else if let Some(tree) = &delta.b_on_a_base {
+                git(&["diff", &delta.a.tip, tree])?;
+            } else {
+                let paths = delta.conflicts.join(", ");
+                return Err(format!(
+                    "{b}'s changes conflict with {a}'s base in {paths}; try --commits"
+                )
+                .into());
             }
         }
         Command::Undo => {
