@@ -271,3 +271,15 @@ fn import_graphite() {
         "Skipped feat/b: stack already records its parent\n"
     );
 }
+
+#[test]
+fn tree_filtered_by_paths() {
+    let fixture = repo();
+    stack(&fixture, &["trunk", "add", "develop"]);
+    let [develop, c] = ["develop", "feat/c"].map(|branch| short(&fixture, branch));
+
+    assert_eq!(
+        stdout(&stack(&fixture, &["tree", "--", "c.txt"])),
+        format!("develop {develop}\n└─ * feat/c {c}\n")
+    );
+}

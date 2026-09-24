@@ -44,7 +44,11 @@ enum Command {
     /// Show the current branch.
     Status,
     /// Show trunks and the branches stacked on them.
-    Tree,
+    Tree {
+        /// Only branches whose own commits change these paths (git pathspecs), and the branches beneath them.
+        #[arg(last = true)]
+        paths: Vec<String>,
+    },
     /// Manage trunks: the long-lived branches stacks are based on.
     #[command(subcommand)]
     Trunk(TrunkCommand),
@@ -316,8 +320,12 @@ fn run(cli: &Cli) -> Result<()> {
             let status = workspace.status()?;
             print(to_value(&status)?, describe(&status.head));
         }
-        Command::Tree => {
-            let tree = workspace.tree()?;
+        Command::Tree { paths } => {
+            let tree = if paths.is_empty() {
+                workspace.tree()?
+            } else {
+                workspace.tree_touching(paths)?
+            };
             let unborn = matches!(workspace.status()?.head, Head::Branch { commit: None, .. });
             let human = if unborn && tree.trunks.is_empty() && tree.unattached.is_empty() {
                 "No commits yet.".to_owned()
