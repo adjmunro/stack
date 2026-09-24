@@ -45,6 +45,9 @@ enum Command {
     Status,
     /// Show trunks and the branches stacked on them.
     Tree {
+        /// Also preview a restack: mark branches that would conflict, or are blocked behind a conflict.
+        #[arg(long)]
+        check: bool,
         /// Only branches whose own commits change these paths (git pathspecs), and the branches beneath them.
         #[arg(last = true)]
         paths: Vec<String>,
@@ -329,19 +332,28 @@ fn run(cli: &Cli) -> Result<()> {
             let status = workspace.status()?;
             print(to_value(&status)?, describe(&status.head));
         }
-        Command::Tree { paths } => {
+        Command::Tree { check, paths } => {
             let tree = if paths.is_empty() {
                 workspace.tree()?
             } else {
                 workspace.tree_touching(paths)?
             };
+            let preview = if *check {
+                Some(workspace.check(None)?)
+            } else {
+                None
+            };
             let unborn = matches!(workspace.status()?.head, Head::Branch { commit: None, .. });
             let human = if unborn && tree.trunks.is_empty() && tree.unattached.is_empty() {
                 "No commits yet.".to_owned()
             } else {
-                render(&tree)
+                render(&tree, preview.as_ref())
             };
-            print(to_value(&tree)?, human);
+            let value = match &preview {
+                Some(preview) => serde_json::json!({ "tree": tree, "preview": preview }),
+                None => to_value(&tree)?,
+            };
+            print(value, human);
         }
         Command::Trunk(TrunkCommand::Add { name }) => {
             let marked = workspace.add_trunk(name)?;
@@ -1116,25 +1128,31 @@ fn describe(head: &Head) -> String {
 }
 
 /// Draws the tree with box-drawing guides. The current branch is marked `*`.
-fn render(tree: &Tree) -> String {
+fn render(tree: &Tree, preview: Option<&RestackPreview>) -> String {
     let mut lines = Vec::new();
     if tree.trunks.is_empty() {
         lines.push("No trunks. Add one with `stack trunk add <branch>`.".to_owned());
     }
     for trunk in &tree.trunks {
-        render_node(trunk, "", "", &mut lines);
+        render_node(trunk, preview, "", "", &mut lines);
     }
     if !tree.trunks.is_empty() && !tree.unattached.is_empty() {
         lines.push(String::new());
         lines.push("Unattached:".to_owned());
         for node in &tree.unattached {
-            render_node(node, "", "", &mut lines);
+            render_node(node, preview, "", "", &mut lines);
         }
     }
     lines.join("\n")
 }
 
-fn render_node(node: &Node, lead: &str, indent: &str, lines: &mut Vec<String>) {
+fn render_node(
+    node: &Node,
+    preview: Option<&RestackPreview>,
+    lead: &str,
+    indent: &str,
+    lines: &mut Vec<String>,
+) {
     let marker = if node.current { "* " } else { "" };
     let mut notes = Vec::new();
     if node.role == Role::Limb {
@@ -1151,6 +1169,20 @@ fn render_node(node: &Node, lead: &str, indent: &str, lines: &mut Vec<String>) {
         }
         if parent.needs_restack {
             notes.push("(needs restack)".to_owned());
+        }
+    }
+    if let Some(preview) = preview {
+        if let Some(conflict) = preview
+            .conflicts
+            .iter()
+            .find(|conflict| conflict.branch == node.name)
+        {
+            notes.push(format!(
+                "(restack conflicts in {})",
+                conflict.paths.join(", ")
+            ));
+        } else if preview.blocked.contains(&node.name) {
+            notes.push("(restack blocked below)".to_owned());
         }
     }
     let notes = notes
@@ -1171,6 +1203,7 @@ fn render_node(node: &Node, lead: &str, indent: &str, lines: &mut Vec<String>) {
         };
         render_node(
             child,
+            preview,
             &format!("{indent}{lead}"),
             &format!("{indent}{next}"),
             lines,

@@ -147,3 +147,18 @@ fn check_previews_without_changing_anything() {
     );
     assert_eq!(stderr(&output), "error: a restack would conflict\n");
 }
+
+#[test]
+fn tree_check_marks_conflicts_and_blocked_branches() {
+    let fixture = advanced();
+    fixture.git(&["switch", "--quiet", "develop"]);
+    fixture.commit("a.txt", "clash", "feat: clash");
+
+    let tree = stdout(&stack(&fixture, &["tree", "--check"]));
+
+    assert!(
+        tree.contains("feat/a") && tree.contains("(needs restack) (restack conflicts in a.txt)"),
+        "{tree}"
+    );
+    assert!(tree.contains("(restack blocked below)"), "{tree}");
+}
