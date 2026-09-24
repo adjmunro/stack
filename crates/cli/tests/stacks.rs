@@ -246,3 +246,28 @@ fn archive_and_restore() {
         "error: feat/a has branches on it: feat/b; move or archive them first\n"
     );
 }
+
+#[test]
+fn import_graphite() {
+    let fixture = repo();
+    std::fs::write(
+        fixture.path().join(".git/.graphite_repo_config"),
+        r#"{"trunk":"develop"}"#,
+    )
+    .unwrap();
+    let json = format!(
+        r#"{{"parentBranchName":"feat/a","parentBranchRevision":"{}"}}"#,
+        fixture.git(&["rev-parse", "feat/a"])
+    );
+    let blob = fixture.git_stdin(&["hash-object", "-w", "--stdin"], json.as_bytes());
+    fixture.git(&["update-ref", "refs/branch-metadata/feat/b", &blob]);
+
+    assert_eq!(
+        stdout(&stack(&fixture, &["import", "graphite"])),
+        "Added trunk develop\nRecorded feat/b on feat/a\n"
+    );
+    assert_eq!(
+        stdout(&stack(&fixture, &["import", "graphite"])),
+        "Skipped feat/b: stack already records its parent\n"
+    );
+}

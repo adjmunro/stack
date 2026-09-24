@@ -171,6 +171,9 @@ enum Command {
         #[arg(short = 'n', long, default_value_t = 20)]
         limit: usize,
     },
+    /// Import stacks from another tool.
+    #[command(subcommand)]
+    Import(ImportSource),
     /// Revert the latest stack command.
     Undo,
     /// Re-apply the most recently undone command.
@@ -198,6 +201,12 @@ impl From<KindArg> for MarkKind {
             KindArg::Flagged => MarkKind::Flagged,
         }
     }
+}
+
+#[derive(Subcommand)]
+enum ImportSource {
+    /// Graphite's trunk and recorded parents. Graphite's own data is left as it is.
+    Graphite,
 }
 
 #[derive(Subcommand)]
@@ -515,6 +524,30 @@ fn run(cli: &Cli) -> Result<()> {
                 lines.join("\n")
             };
             print(to_value(&lost)?, human);
+        }
+        Command::Import(ImportSource::Graphite) => {
+            let imported = workspace.import_graphite()?;
+            let mut lines: Vec<String> = imported
+                .trunks
+                .iter()
+                .map(|trunk| format!("Added trunk {trunk}"))
+                .collect();
+            lines.extend(
+                imported
+                    .parents
+                    .iter()
+                    .map(|parent| format!("Recorded {} on {}", parent.branch, parent.parent)),
+            );
+            lines.extend(
+                imported
+                    .skipped
+                    .iter()
+                    .map(|skipped| format!("Skipped {}: {}", skipped.branch, skipped.reason)),
+            );
+            if lines.is_empty() {
+                lines.push("Nothing to import.".to_owned());
+            }
+            print(to_value(&imported)?, lines.join("\n"));
         }
         Command::Undo => {
             let undone = workspace.undo()?;
