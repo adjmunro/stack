@@ -365,11 +365,37 @@ impl GixRepo {
     }
 
     pub(crate) fn discover(path: &Path, environment: Environment) -> Result<Self, Error> {
-        let repo =
-            gix::ThreadSafeRepository::discover(path).map_err(|source| Error::NotARepository {
-                path: path.to_owned(),
-                source: source.into(),
-            })?;
+        let discovered = match &environment {
+            Environment::Inherit => gix::ThreadSafeRepository::discover(path),
+            // Only the repository's own config, plus the identity the environment gives.
+            Environment::Exactly(variables) => {
+                let value = |name: &str| {
+                    variables
+                        .iter()
+                        .find(|(key, _)| key == name)
+                        .map(|(_, value)| value.to_string_lossy().into_owned())
+                };
+                let overrides: Vec<String> = [
+                    ("GIT_COMMITTER_NAME", "committer.name"),
+                    ("GIT_COMMITTER_EMAIL", "committer.email"),
+                    ("GIT_AUTHOR_NAME", "author.name"),
+                    ("GIT_AUTHOR_EMAIL", "author.email"),
+                ]
+                .into_iter()
+                .filter_map(|(variable, key)| value(variable).map(|value| format!("{key}={value}")))
+                .collect();
+                let options = gix::open::Options::isolated().config_overrides(overrides);
+                let trust = gix::sec::trust::Mapping {
+                    full: options.clone(),
+                    reduced: options,
+                };
+                gix::ThreadSafeRepository::discover_opts(path, Default::default(), trust)
+            }
+        };
+        let repo = discovered.map_err(|source| Error::NotARepository {
+            path: path.to_owned(),
+            source: source.into(),
+        })?;
         Ok(Self {
             repo,
             signs_commits: std::sync::OnceLock::new(),

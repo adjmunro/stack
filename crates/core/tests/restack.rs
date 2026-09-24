@@ -411,3 +411,13 @@ fn restacked_commits_are_unsigned_when_the_user_does_not_sign() {
 
     assert!(!fixture.git(&["cat-file", "-p", "b"]).contains("gpgsig"));
 }
+
+#[test]
+fn reflog_entries_use_the_sealed_environment_s_identity() {
+    let fixture = advanced();
+
+    workspace(&fixture).restack("develop").unwrap();
+
+    let identity = fixture.git(&["reflog", "-1", "--format=%gn <%ge>", "b"]);
+    assert_eq!(identity, "Fixture Committer <committer@fixture.invalid>");
+}
