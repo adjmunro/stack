@@ -223,6 +223,12 @@ pub(crate) trait GitRepo: Send + Sync {
     /// The names of this repository's remotes, sorted.
     fn remotes(&self) -> Result<Vec<String>, Error>;
 
+    /// Every value of a multi-valued git config key, in the order git reads them.
+    fn config_values(&self, key: &str) -> Result<Vec<String>, Error>;
+
+    /// The hooks directory git uses (honouring `core.hooksPath`), as an absolute path.
+    fn hooks_dir(&self) -> Result<PathBuf, Error>;
+
     /// A git config value as git resolves it (all scopes, includes), or `None` if unset.
     fn config_value(&self, key: &str) -> Result<Option<String>, Error>;
 
@@ -831,6 +837,27 @@ impl GitRepo for GixRepo {
             .collect();
         remotes.sort();
         Ok(remotes)
+    }
+
+    fn config_values(&self, key: &str) -> Result<Vec<String>, Error> {
+        let mut command = self.git(&["config", "--get-all", key]);
+        let output = run(&mut command, b"")?;
+        match output.status.code() {
+            Some(0) => Ok(String::from_utf8_lossy(&output.stdout)
+                .lines()
+                .map(str::to_owned)
+                .collect()),
+            Some(1) => Ok(Vec::new()),
+            _ => Err(command_error(&command, &output)),
+        }
+    }
+
+    fn hooks_dir(&self) -> Result<PathBuf, Error> {
+        let output = run_ok(
+            &mut self.git(&["rev-parse", "--path-format=absolute", "--git-path", "hooks"]),
+            b"",
+        )?;
+        Ok(PathBuf::from(String::from_utf8_lossy(&output).trim()))
     }
 
     fn config_value(&self, key: &str) -> Result<Option<String>, Error> {

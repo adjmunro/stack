@@ -479,6 +479,12 @@ mod tests {
         fn config_value(&self, key: &str) -> Result<Option<String>, Error> {
             self.inner.config_value(key)
         }
+        fn config_values(&self, key: &str) -> Result<Vec<String>, Error> {
+            self.inner.config_values(key)
+        }
+        fn hooks_dir(&self) -> Result<PathBuf, Error> {
+            self.inner.hooks_dir()
+        }
         fn push(
             &self,
             remote: &str,

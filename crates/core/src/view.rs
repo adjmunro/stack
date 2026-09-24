@@ -432,6 +432,24 @@ pub enum ProposalAction {
     },
 }
 
+/// Something a push would do that the guard stops. See [`crate::Workspace::check_push`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum GuardViolation {
+    /// Pushing to (or deleting) a protected branch.
+    Protected { branch: String, deleting: bool },
+    /// Pushing `local` (a branch, or a commit) to a remote branch with another name.
+    NameMismatch { local: String, remote: String },
+}
+
+/// The result of [`crate::Workspace::install_guard`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct GuardInstalled {
+    pub hook: std::path::PathBuf,
+    /// Whether an existing `pre-push` hook runs after the guard.
+    pub chained: bool,
+}
+
 /// The result of [`crate::Workspace::push`].
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Pushed {
