@@ -120,3 +120,9 @@
 - Category: environment
 - Detail: `Workspace::discover_with(path, Environment::Exactly(vars))` runs every `git` subprocess with exactly `vars`. The default inherits the process environment minus variables that redirect git (`GIT_INDEX_FILE`, etc.).
 - Reason: Tests must not inherit the developer's git config (it signed fixture commits with the developer's key). GUIs need it too: macOS GUI apps don't inherit the login shell's `PATH` or `SSH_AUTH_SOCK`.
+
+2026-09-24T07:54Z@d42437b4
+- Category: restack
+- Detail: Replays merge trees (`git merge-tree --write-tree --merge-base=<tree> <tree> <tree>`), so previews (`stack check`) create no commits and never sign. Requires a git that accepts trees there (2.45+ is known to).
+- Detail: A restack reports every conflicting branch and the branches blocked behind each; independent stacks still restack.
+- Reason: Passive conflict checks (IDEAS) must be safe to run often: no signing prompts, no refs, no journal. They still write unreferenced tree objects, which `git gc` removes.

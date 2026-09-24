@@ -21,6 +21,11 @@
 
 ## Long Horizon Tasks
 
+2026-09-24T07:54Z@d42437b4:
+- Blockers: NO BLOCKERS
+- Where: crates/core/src/git.rs (GixRepo::merge_trees), crates/core/src/restack.rs
+- What: Run preview merges against a temporary object directory (`GIT_OBJECT_DIRECTORY` + alternates) so `check` writes nothing at all; then show conflict previews in `stack tree`.
+
 2026-09-23T12:31Z@89920ef0:
 - Blockers: NO BLOCKERS
 - Where: crates/core/src/resolve.rs (Resolver::derive), crates/core/src/git.rs (Branch)
