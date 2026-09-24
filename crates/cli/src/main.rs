@@ -7,9 +7,9 @@ use std::process::ExitCode;
 use clap::{Parser, Subcommand};
 use serde_json::{Value, to_value};
 use stack_core::{
-    Conflict, Direction, Error, Head, Marked, Node, Operation, OperationState, Outcome,
-    PushOutcome, Pushed, RecoveryOutcome, RestackPreview, Restacked, Role, Scope, Source, Step,
-    Tree, Workspace,
+    CommitReview, Conflict, Direction, Error, Head, MarkKind, Marked, Node, Operation,
+    OperationState, Outcome, PushOutcome, Pushed, RecoveryOutcome, RestackPreview, Restacked, Role,
+    Scope, Source, Step, Tree, Workspace,
 };
 
 type Result<T, E = Box<dyn std::error::Error>> = std::result::Result<T, E>;
@@ -127,6 +127,36 @@ enum Command {
     Unarchive { name: String },
     /// List archived branches.
     Archived,
+    /// List a branch's own commits with their review marks.
+    Review {
+        /// Branch to review [default: current branch].
+        branch: Option<String>,
+    },
+    /// Mark commits as reviewed (or tested, or flagged). Marks survive rebases until the change itself changes.
+    Mark {
+        /// Commits to mark [default: HEAD].
+        revisions: Vec<String>,
+        /// Mark every commit of this branch instead.
+        #[arg(long, conflicts_with = "revisions")]
+        branch: Option<String>,
+        /// Mark as built and tested instead of reviewed.
+        #[arg(long, conflicts_with = "flagged")]
+        tested: bool,
+        /// Flag for another look instead of marking reviewed.
+        #[arg(long)]
+        flagged: bool,
+        /// A note to keep with the mark.
+        #[arg(long)]
+        note: Option<String>,
+    },
+    /// Remove review marks.
+    Unmark {
+        /// Commits to unmark [default: HEAD].
+        revisions: Vec<String>,
+        /// Remove only this kind of mark.
+        #[arg(long, value_enum)]
+        kind: Option<KindArg>,
+    },
     /// Revert the latest stack command.
     Undo,
     /// Re-apply the most recently undone command.
@@ -137,6 +167,23 @@ enum Command {
         #[arg(short = 'n', long, default_value_t = 20)]
         limit: usize,
     },
+}
+
+#[derive(Clone, Copy, clap::ValueEnum)]
+enum KindArg {
+    Reviewed,
+    Tested,
+    Flagged,
+}
+
+impl From<KindArg> for MarkKind {
+    fn from(kind: KindArg) -> Self {
+        match kind {
+            KindArg::Reviewed => MarkKind::Reviewed,
+            KindArg::Tested => MarkKind::Tested,
+            KindArg::Flagged => MarkKind::Flagged,
+        }
+    }
 }
 
 #[derive(Subcommand)]
@@ -310,6 +357,62 @@ fn run(cli: &Cli) -> Result<()> {
             };
             print(to_value(&archived)?, human);
         }
+        Command::Review { branch } => {
+            let branch = branch_or_current(&workspace, branch.as_deref())?;
+            let review = workspace.review(&branch)?;
+            print(to_value(&review)?, describe_review(&review));
+        }
+        Command::Mark {
+            revisions,
+            branch,
+            tested,
+            flagged,
+            note,
+        } => {
+            let kind = match (tested, flagged) {
+                (true, _) => MarkKind::Tested,
+                (_, true) => MarkKind::Flagged,
+                _ => MarkKind::Reviewed,
+            };
+            let revisions: Vec<String> = match branch {
+                Some(branch) => workspace
+                    .review(branch)?
+                    .into_iter()
+                    .map(|commit| commit.commit)
+                    .collect(),
+                None if revisions.is_empty() => vec!["HEAD".to_owned()],
+                None => revisions.clone(),
+            };
+            for revision in &revisions {
+                workspace.mark(revision, kind, note.as_deref())?;
+            }
+            let plural = if revisions.len() == 1 { "" } else { "s" };
+            let value = serde_json::json!({ "marked": revisions, "kind": kind });
+            print(
+                value,
+                format!(
+                    "Marked {} commit{plural} {}",
+                    revisions.len(),
+                    mark_name(kind)
+                ),
+            );
+        }
+        Command::Unmark { revisions, kind } => {
+            let revisions = if revisions.is_empty() {
+                vec!["HEAD".to_owned()]
+            } else {
+                revisions.clone()
+            };
+            let mut removed = 0;
+            for revision in &revisions {
+                removed += workspace.unmark(revision, kind.map(MarkKind::from))?;
+            }
+            let plural = if removed == 1 { "" } else { "s" };
+            print(
+                serde_json::json!({ "removed": removed }),
+                format!("Removed {removed} mark{plural}"),
+            );
+        }
         Command::Undo => {
             let undone = workspace.undo()?;
             print(
@@ -433,6 +536,40 @@ fn navigate(workspace: &Workspace, step: Step, print: &dyn Fn(Value, String)) ->
         );
     }
     Ok(())
+}
+
+fn mark_name(kind: MarkKind) -> &'static str {
+    match kind {
+        MarkKind::Reviewed => "reviewed",
+        MarkKind::Tested => "tested",
+        MarkKind::Flagged => "flagged",
+    }
+}
+
+fn describe_review(review: &[CommitReview]) -> String {
+    if review.is_empty() {
+        return "No commits of its own.".to_owned();
+    }
+    let lines: Vec<String> = review
+        .iter()
+        .map(|commit| {
+            let marks: Vec<String> = commit
+                .marks
+                .iter()
+                .map(|mark| match &mark.note {
+                    Some(note) => format!("{}: {note}", mark_name(mark.kind)),
+                    None => mark_name(mark.kind).to_owned(),
+                })
+                .collect();
+            let marks = if marks.is_empty() {
+                String::new()
+            } else {
+                format!(" [{}]", marks.join(", "))
+            };
+            format!("{} {}{marks}", short(&commit.commit), commit.summary)
+        })
+        .collect();
+    lines.join("\n")
 }
 
 fn describe_push(pushed: &Pushed) -> String {
