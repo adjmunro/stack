@@ -202,6 +202,8 @@ pub(crate) enum Command {
         #[arg(required = true, value_parser = parse_point)]
         points: Vec<(String, String)>,
     },
+    /// Fold each staged hunk into the commit in this stack that last changed its lines; the rest stay staged.
+    Absorb,
     /// Amend the staged changes into an earlier commit of this stack (not just HEAD); later commits and the branches
     /// above are restacked. The working tree isn't touched.
     Amend {

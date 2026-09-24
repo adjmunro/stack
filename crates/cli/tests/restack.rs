@@ -252,3 +252,23 @@ fn amend_into_a_parent_branch() {
     );
     assert_eq!(fixture.git(&["show", "feat/b:a.txt"]), "a, fixed");
 }
+
+#[test]
+fn absorb_folds_hunks_into_their_commits() {
+    let fixture = advanced();
+    fixture.write("a.txt", "a, fixed");
+    fixture.write("new.txt", "new");
+    fixture.git(&["add", "a.txt", "new.txt"]);
+    let a = fixture.git(&["rev-parse", "--short=7", "feat/a"]);
+
+    let output = stdout(&stack(&fixture, &["absorb"]));
+
+    assert_eq!(
+        output,
+        format!(
+            "Absorbed a.txt line 1 into {a}\nLeft staged: new.txt at the top (only adds lines)\n"
+        )
+    );
+    assert_eq!(fixture.git(&["show", "feat/a:a.txt"]), "a, fixed");
+    assert_eq!(fixture.git(&["diff", "--cached", "--name-only"]), "new.txt");
+}

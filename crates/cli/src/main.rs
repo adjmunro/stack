@@ -536,6 +536,27 @@ fn run(cli: &Cli) -> Result<()> {
                 return Err("some commit subjects break the rules".into());
             }
         }
+        Command::Absorb => {
+            let absorbed = workspace.absorb()?;
+            let mut lines: Vec<String> = absorbed
+                .absorbed
+                .iter()
+                .map(|hunk| {
+                    format!(
+                        "Absorbed {} {} into {}",
+                        hunk.path,
+                        hunk.lines,
+                        short(&hunk.commit)
+                    )
+                })
+                .collect();
+            lines.extend(absorbed.left.iter().map(|hunk| {
+                let reason = hunk.reason.as_deref().unwrap_or("left");
+                format!("Left staged: {} {} ({reason})", hunk.path, hunk.lines)
+            }));
+            print(to_value(&absorbed)?, lines.join("\n"));
+            note_follower_syncs(&workspace)?;
+        }
         Command::Amend { into } => {
             let amended = workspace.amend_into(into)?;
             let summary = format!(
