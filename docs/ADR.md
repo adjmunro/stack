@@ -119,6 +119,7 @@
 2026-09-23T20:13Z@c8897497
 - Category: environment
 - Detail: `Workspace::discover_with(path, Environment::Exactly(vars))` runs every `git` subprocess with exactly `vars`. The default inherits the process environment minus variables that redirect git (`GIT_INDEX_FILE`, etc.).
+- Detail: Under `Exactly`, the repository is also opened isolated in-process (its own config only), with identity overrides taken from `vars`.
 - Reason: Tests must not inherit the developer's git config (it signed fixture commits with the developer's key). GUIs need it too: macOS GUI apps don't inherit the login shell's `PATH` or `SSH_AUTH_SOCK`.
 
 2026-09-24T07:54Z@d42437b4

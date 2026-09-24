@@ -45,11 +45,6 @@
 - Where: crates/testkit
 - What: Fixture builder for stacks/branch graphs.
 
-2026-09-23T11:05Z@82e6359b:
-- Blockers: NO BLOCKERS
-- Where: crates/core/src/git.rs (GixRepo::discover), crates/core/tests
-- What: `git` subprocesses in tests are sealed via `Environment::Exactly`, but gix itself still reads the developer's global config in-process (e.g. reflog identity). Feed the environment to gix too (open options / config overrides).
-
 
 ---
 
