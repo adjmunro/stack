@@ -30,7 +30,6 @@
 - Blockers: NO BLOCKERS
 - Where: crates/core/src/resolve.rs, crates/core/src/git.rs
 - What: Performance: one walk per branch plus pairwise `merge_base`; unrelated histories (e.g. `gh-pages`) walk everything. Consider one shared walk and the commit-graph. Add a benchmark fixture first.
-- What: Prune `refs/stack/branches/*` records for deleted branches during mutations.
 
 2026-09-23T20:13Z@c8897497:
 - Blockers: NO BLOCKERS
@@ -39,7 +38,6 @@
 - What: Replay merge commits.
 - What: Deferred signing until push (see IDEAS.md), as an option.
 - What: gc protection for commits of branches `stack` deletes (moved branches are covered by their reflogs).
-- What: HEAD's reflog isn't updated when the checked-out branch moves.
 - What: Property tests (`proptest`) over random stacks: restack then undo restores the snapshot; restack matches `git rebase`.
 
 2026-09-23T10:37Z@507992a:
