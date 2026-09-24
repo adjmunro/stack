@@ -7,8 +7,9 @@ use std::process::ExitCode;
 use clap::{Parser, Subcommand};
 use serde_json::{Value, to_value};
 use stack_core::{
-    Conflict, Error, Head, Marked, Node, Operation, OperationState, Outcome, RecoveryOutcome,
-    RestackPreview, Restacked, Role, Source, Tree, Workspace,
+    Conflict, Direction, Error, Head, Marked, Node, Operation, OperationState, Outcome,
+    PushOutcome, Pushed, RecoveryOutcome, RestackPreview, Restacked, Role, Scope, Source, Tree,
+    Workspace,
 };
 
 type Result<T, E = Box<dyn std::error::Error>> = std::result::Result<T, E>;
@@ -76,6 +77,23 @@ enum Command {
         /// Its new parent.
         #[arg(long)]
         onto: String,
+    },
+    /// Push a branch's line: its parents down to the nearest trunk, and the branches on it up to the next trunks.
+    Push {
+        /// Branch whose line to push [default: current branch].
+        branch: Option<String>,
+        /// Only the branch and its parents.
+        #[arg(long, conflicts_with = "leafward")]
+        rootward: bool,
+        /// Only the branch and the branches on it.
+        #[arg(long)]
+        leafward: bool,
+        /// Carry on past trunks stacked above, to the leaves.
+        #[arg(short, long)]
+        all: bool,
+        /// Remote to push to [default: the branch's upstream remote, else origin, else the only remote].
+        #[arg(long)]
+        remote: Option<String>,
     },
     /// Revert the latest stack command.
     Undo,
@@ -192,6 +210,36 @@ fn run(cli: &Cli) -> Result<()> {
                 return Err("move stopped at a conflict".into());
             }
         }
+        Command::Push {
+            branch,
+            rootward,
+            leafward,
+            all,
+            remote,
+        } => {
+            let branch = branch_or_current(&workspace, branch.as_deref())?;
+            let direction = match (rootward, leafward) {
+                (true, _) => Direction::Rootward,
+                (_, true) => Direction::Leafward,
+                _ => Direction::Both,
+            };
+            let pushed = workspace.push(
+                &branch,
+                Scope {
+                    direction,
+                    through_limbs: *all,
+                },
+                remote.as_deref(),
+            )?;
+            print(to_value(&pushed)?, describe_push(&pushed));
+            if pushed
+                .branches
+                .iter()
+                .any(|branch| branch.outcome == PushOutcome::Rejected)
+            {
+                return Err("some branches were rejected; fetch, restack, and push again".into());
+            }
+        }
         Command::Undo => {
             let undone = workspace.undo()?;
             print(
@@ -295,6 +343,30 @@ fn describe_preview(preview: &RestackPreview) -> String {
     if lines.is_empty() {
         lines.push("Everything is up to date.".to_owned());
     }
+    lines.join("\n")
+}
+
+fn describe_push(pushed: &Pushed) -> String {
+    if pushed.branches.is_empty() {
+        return "Nothing to push.".to_owned();
+    }
+    let remote = &pushed.remote;
+    let lines: Vec<String> = pushed
+        .branches
+        .iter()
+        .map(|branch| {
+            let name = &branch.name;
+            match branch.outcome {
+                PushOutcome::Created => format!("Pushed {name} to {remote} (new)"),
+                PushOutcome::FastForwarded => format!("Pushed {name} to {remote}"),
+                PushOutcome::Forced => {
+                    format!("Pushed {name} to {remote} (replaced its rewritten remote branch)")
+                }
+                PushOutcome::UpToDate => format!("{name} is up to date on {remote}"),
+                PushOutcome::Rejected => format!("Rejected {name}: {}", branch.summary),
+            }
+        })
+        .collect();
     lines.join("\n")
 }
 
