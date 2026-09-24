@@ -144,6 +144,38 @@ pub(crate) trait GitRepo: Send + Sync {
 
     /// Branches checked out in other worktrees of this repository.
     fn checked_out_elsewhere(&self) -> Result<Vec<String>, Error>;
+
+    /// The names of this repository's remotes, sorted.
+    fn remotes(&self) -> Result<Vec<String>, Error>;
+
+    /// A git config value as git resolves it (all scopes, includes), or `None` if unset.
+    fn config_value(&self, key: &str) -> Result<Option<String>, Error>;
+
+    /// Pushes each branch to the same name on `remote` (`git push --porcelain`), with `--force-with-lease` against
+    /// its `lease` (`None`: it must not exist there). Runs the user's `pre-push` hook. Upstreams are untouched.
+    ///
+    /// # Errors
+    /// Only if git can't run or the remote can't be reached; per-branch rejections are in the result.
+    fn push(&self, remote: &str, branches: &[PushRef]) -> Result<Vec<PushStatus>, Error>;
+
+    /// Makes `remote`/`branch` the upstream of local `branch`.
+    fn set_upstream(&self, branch: &str, remote: &str) -> Result<(), Error>;
+}
+
+/// A branch to push, and the value its remote-tracking ref had when last fetched.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct PushRef {
+    pub branch: String,
+    pub lease: Option<String>,
+}
+
+/// What happened to one pushed branch.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct PushStatus {
+    pub branch: String,
+    pub outcome: crate::PushOutcome,
+    /// git's summary, e.g. `[rejected] (stale info)`.
+    pub summary: String,
 }
 
 /// [`GitRepo`] backed by `gix`.
@@ -558,6 +590,65 @@ impl GitRepo for GixRepo {
         Ok(branches)
     }
 
+    fn remotes(&self) -> Result<Vec<String>, Error> {
+        let listing = run_ok(&mut self.git(&["remote"]), b"")?;
+        let mut remotes: Vec<String> = String::from_utf8_lossy(&listing)
+            .lines()
+            .map(str::to_owned)
+            .collect();
+        remotes.sort();
+        Ok(remotes)
+    }
+
+    fn config_value(&self, key: &str) -> Result<Option<String>, Error> {
+        let mut command = self.git(&["config", "--get", key]);
+        let output = run(&mut command, b"")?;
+        match output.status.code() {
+            Some(0) => Ok(Some(
+                String::from_utf8_lossy(&output.stdout)
+                    .trim_end()
+                    .to_owned(),
+            )),
+            Some(1) => Ok(None),
+            _ => Err(command_error(&command, &output)),
+        }
+    }
+
+    fn push(&self, remote: &str, branches: &[PushRef]) -> Result<Vec<PushStatus>, Error> {
+        let mut args = vec!["push".to_owned(), "--porcelain".to_owned()];
+        for branch in branches {
+            let lease = branch.lease.as_deref().unwrap_or("");
+            args.push(format!(
+                "--force-with-lease=refs/heads/{}:{lease}",
+                branch.branch
+            ));
+        }
+        args.push(remote.to_owned());
+        args.extend(
+            branches
+                .iter()
+                .map(|branch| format!("refs/heads/{0}:refs/heads/{0}", branch.branch)),
+        );
+        let args: Vec<&str> = args.iter().map(String::as_str).collect();
+        let mut command = self.git(&args);
+        let output = run(&mut command, b"")?;
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let statuses: Vec<PushStatus> = stdout.lines().filter_map(parse_push_line).collect();
+        if statuses.is_empty() && !output.status.success() {
+            return Err(command_error(&command, &output));
+        }
+        Ok(statuses)
+    }
+
+    fn set_upstream(&self, branch: &str, remote: &str) -> Result<(), Error> {
+        let upstream = format!("--set-upstream-to={remote}/{branch}");
+        run_ok(
+            &mut self.git(&["branch", "--quiet", &upstream, branch]),
+            b"",
+        )
+        .map(|_| ())
+    }
+
     fn update_refs(&self, updates: &[RefUpdate], message: &str) -> Result<(), Error> {
         let repo = self.repo.to_thread_local();
         let checked_out = repo
@@ -625,6 +716,28 @@ fn former_tips(entries: &[(String, String, i64)], tip: &str) -> Vec<FormerTip> {
         });
     }
     former
+}
+
+/// Parses one ref line of `git push --porcelain`: `<flag>\t<from>:<to>\t<summary>`.
+fn parse_push_line(line: &str) -> Option<PushStatus> {
+    let mut fields = line.splitn(3, '\t');
+    let flag = fields.next()?;
+    let (_, to) = fields.next()?.split_once(':')?;
+    let summary = fields.next().unwrap_or_default().to_owned();
+    let outcome = match flag {
+        "*" => crate::PushOutcome::Created,
+        " " => crate::PushOutcome::FastForwarded,
+        "+" => crate::PushOutcome::Forced,
+        "=" => crate::PushOutcome::UpToDate,
+        "!" => crate::PushOutcome::Rejected,
+        _ => return None,
+    };
+    let branch = to.strip_prefix("refs/heads/")?.to_owned();
+    Some(PushStatus {
+        branch,
+        outcome,
+        summary,
+    })
 }
 
 /// Runs `command` with `stdin`, returning its output whatever the exit status.

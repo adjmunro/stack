@@ -392,6 +392,22 @@ mod tests {
         fn checked_out_elsewhere(&self) -> Result<Vec<String>, Error> {
             self.inner.checked_out_elsewhere()
         }
+        fn remotes(&self) -> Result<Vec<String>, Error> {
+            self.inner.remotes()
+        }
+        fn config_value(&self, key: &str) -> Result<Option<String>, Error> {
+            self.inner.config_value(key)
+        }
+        fn push(
+            &self,
+            remote: &str,
+            branches: &[crate::git::PushRef],
+        ) -> Result<Vec<crate::git::PushStatus>, Error> {
+            self.inner.push(remote, branches)
+        }
+        fn set_upstream(&self, branch: &str, remote: &str) -> Result<(), Error> {
+            self.inner.set_upstream(branch, remote)
+        }
         fn update_refs(&self, updates: &[RefUpdate], message: &str) -> Result<(), Error> {
             if self.apply_refs {
                 self.inner.update_refs(updates, message)?;

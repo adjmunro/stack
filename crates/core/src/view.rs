@@ -213,3 +213,51 @@ pub struct Conflict {
     /// The commit it was based on; `git rebase --onto <onto> <offshoot> <branch>` resolves it by hand.
     pub offshoot: String,
 }
+
+/// Which branches around the current one an operation covers. See the glossary's "line".
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Scope {
+    pub direction: Direction,
+    /// Continue leafward past limbs to the leaves.
+    pub through_limbs: bool,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Direction {
+    /// Parents rootward and descendants leafward.
+    #[default]
+    Both,
+    /// The branch and its parents, up to the nearest trunk or limb.
+    Rootward,
+    /// The branch and its descendants.
+    Leafward,
+}
+
+/// The result of [`crate::Workspace::push`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct Pushed {
+    pub remote: String,
+    /// One entry per branch in the scope, rootward first.
+    pub branches: Vec<PushedBranch>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct PushedBranch {
+    pub name: String,
+    pub outcome: PushOutcome,
+    /// git's summary, e.g. `[rejected] (stale info)`.
+    pub summary: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PushOutcome {
+    Created,
+    FastForwarded,
+    /// Replaced a remote branch that had been rewritten locally (e.g. by a restack), which the lease allowed.
+    Forced,
+    UpToDate,
+    /// Refused, e.g. because the remote branch changed since it was last fetched.
+    Rejected,
+}

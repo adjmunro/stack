@@ -76,6 +76,20 @@ pub enum Error {
     #[error("can't restack {branch}: it contains merge commit {commit}")]
     MergeCommit { branch: String, commit: String },
 
+    /// There's no remote to push to: none is configured, or there are several and none was chosen.
+    #[error("no remote to push to; add one, or choose one with --remote")]
+    NoRemote,
+
+    #[error("no such remote: {name}")]
+    UnknownRemote { name: String },
+
+    /// `branch` tracks a remote branch with a different name, so pushing it to its own name would publish it
+    /// somewhere unexpected.
+    #[error(
+        "{branch} tracks {upstream}, which has a different name; push it with git, or change its upstream"
+    )]
+    UpstreamMismatch { branch: String, upstream: String },
+
     /// The op log (SQLite) failed.
     #[error("op log: {0}")]
     Store(BoxError),
