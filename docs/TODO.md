@@ -21,11 +21,6 @@
 
 ## Long Horizon Tasks
 
-2026-09-24T12:41Z@e87a43d4:
-- Blockers: NO BLOCKERS
-- Where: crates/core/src/resolve.rs, crates/cli/src/main.rs (render)
-- What: Show conflict previews in `stack tree` (e.g. `--check`), now that `check` writes nothing.
-
 2026-09-23T12:31Z@89920ef0:
 - Blockers: NO BLOCKERS
 - Where: crates/core/src/resolve.rs (Resolver::derive), crates/core/src/git.rs (Branch)
