@@ -479,6 +479,13 @@ fn run(cli: &Cli) -> Result<()> {
                 .into());
             }
         }
+        Command::Split { branch, points } => {
+            let created = workspace.split(branch, points)?;
+            print(
+                to_value(&created)?,
+                format!("Split {branch} into {}", created.join(", ")),
+            );
+        }
         Command::Undo => {
             let undone = workspace.undo()?;
             note_follower_syncs(&workspace)?;

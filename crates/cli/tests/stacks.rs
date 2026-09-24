@@ -283,3 +283,20 @@ fn tree_filtered_by_paths() {
         format!("develop {develop}\n└─ * feat/c {c}\n")
     );
 }
+
+#[test]
+fn split_a_branch() {
+    let fixture = repo();
+    stack(&fixture, &["trunk", "add", "develop"]);
+    fixture.git(&["switch", "--quiet", "feat/b"]);
+    fixture.commit("b2.txt", "b2", "feat: b2");
+
+    assert_eq!(
+        stdout(&stack(&fixture, &["split", "feat/b", "HEAD~1=feat/b1"])),
+        "Split feat/b into feat/b1\n"
+    );
+    assert!(stdout(&stack(&fixture, &["tree"])).contains("feat/b1"));
+    assert!(
+        stderr(&stack(&fixture, &["split", "feat/b", "nonsense"])).contains("expected COMMIT=NAME")
+    );
+}

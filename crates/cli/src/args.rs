@@ -195,6 +195,13 @@ pub(crate) enum Command {
         #[arg(long)]
         commits: bool,
     },
+    /// Split a branch into a stack: new branches at some of its own commits, stacked in order beneath it.
+    Split {
+        branch: String,
+        /// Where to cut, as COMMIT=NAME (e.g. `HEAD~2=feat/part-1`); repeatable.
+        #[arg(required = true, value_parser = parse_point)]
+        points: Vec<(String, String)>,
+    },
     /// Revert the latest stack command.
     Undo,
     /// Re-apply the most recently undone command.
@@ -296,5 +303,15 @@ impl From<KindArg> for MarkKind {
             KindArg::Tested => MarkKind::Tested,
             KindArg::Flagged => MarkKind::Flagged,
         }
+    }
+}
+
+/// Parses a split point, `COMMIT=NAME`.
+fn parse_point(point: &str) -> std::result::Result<(String, String), String> {
+    match point.split_once('=') {
+        Some((commit, name)) if !commit.is_empty() && !name.is_empty() => {
+            Ok((commit.to_owned(), name.to_owned()))
+        }
+        _ => Err(format!("expected COMMIT=NAME, got {point:?}")),
     }
 }
