@@ -8,12 +8,12 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use rusqlite::{Connection, params};
 
-use crate::git::RefUpdate;
+use crate::git::{Checkout, RefUpdate};
 use crate::{Error, MarkKind, OperationKind, OperationState, ReviewMark};
 
-const SCHEMA_VERSION: i64 = 3;
+const SCHEMA_VERSION: i64 = 4;
 
-const MIGRATIONS: [&str; 3] = [
+const MIGRATIONS: [&str; 4] = [
     r#"
     CREATE TABLE operation (
         id          INTEGER PRIMARY KEY,
@@ -46,6 +46,13 @@ const MIGRATIONS: [&str; 3] = [
         PRIMARY KEY (key, kind)
     );
 "#,
+    r#"
+    ALTER TABLE operation ADD COLUMN checkout_worktree TEXT;
+    CREATE TABLE follower (
+        worktree TEXT PRIMARY KEY,
+        branch   TEXT NOT NULL
+    );
+"#,
 ];
 
 /// An operation as stored.
@@ -59,8 +66,8 @@ pub(crate) struct Record {
     pub undone: bool,
     pub started_at: i64,
     pub updates: Vec<RefUpdate>,
-    /// Commits the working tree was moved `(from, to)` before the refs, if the checked-out branch moved.
-    pub checkout: Option<(String, String)>,
+    /// The worktree moved before the refs, if a checked-out branch moved.
+    pub checkout: Option<Checkout>,
 }
 
 pub(crate) struct Store {
@@ -115,20 +122,22 @@ impl Store {
         description: &str,
         target: Option<i64>,
         updates: &[RefUpdate],
-        checkout: Option<&(String, String)>,
+        checkout: Option<&Checkout>,
     ) -> Result<i64, Error> {
         let transaction = self.connection.transaction().map_err(Error::store)?;
         transaction
             .execute(
-                "INSERT INTO operation (kind, description, target, state, started_at, checkout_from, checkout_to)
-                 VALUES (?1, ?2, ?3, 'pending', ?4, ?5, ?6)",
+                "INSERT INTO operation
+                     (kind, description, target, state, started_at, checkout_from, checkout_to, checkout_worktree)
+                 VALUES (?1, ?2, ?3, 'pending', ?4, ?5, ?6, ?7)",
                 params![
                     kind_name(kind),
                     description,
                     target,
                     now(),
-                    checkout.map(|(from, _)| from),
-                    checkout.map(|(_, to)| to)
+                    checkout.map(|checkout| &checkout.from),
+                    checkout.map(|checkout| &checkout.to),
+                    checkout.and_then(|checkout| checkout.worktree.as_ref()).map(|path| path.to_string_lossy())
                 ],
             )
             .map_err(Error::store)?;
@@ -199,7 +208,8 @@ impl Store {
 
     fn query(&self, clause: &str, parameters: impl rusqlite::Params) -> Result<Vec<Record>, Error> {
         let sql = format!(
-            "SELECT id, kind, description, target, state, undone, started_at, checkout_from, checkout_to
+            "SELECT id, kind, description, target, state, undone, started_at, checkout_from, checkout_to,
+                    checkout_worktree
              FROM operation {clause}"
         );
         let mut statement = self.connection.prepare(&sql).map_err(Error::store)?;
@@ -214,9 +224,15 @@ impl Store {
                     undone: row.get(5)?,
                     started_at: row.get(6)?,
                     updates: Vec::new(),
-                    checkout: row
-                        .get::<_, Option<String>>(7)?
-                        .zip(row.get::<_, Option<String>>(8)?),
+                    checkout: {
+                        let worktree = row
+                            .get::<_, Option<String>>(9)?
+                            .map(std::path::PathBuf::from);
+                        let from_to = row
+                            .get::<_, Option<String>>(7)?
+                            .zip(row.get::<_, Option<String>>(8)?);
+                        from_to.map(|(from, to)| Checkout { worktree, from, to })
+                    },
                 })
             })
             .map_err(Error::store)?;
@@ -240,6 +256,39 @@ impl Store {
                     new: row.get(2)?,
                 })
             })
+            .map_err(Error::store)?;
+        rows.collect::<Result<_, _>>().map_err(Error::store)
+    }
+
+    /// Records that the worktree at `worktree` follows `branch`, replacing what it followed before.
+    pub(crate) fn set_follower(&self, worktree: &str, branch: &str) -> Result<(), Error> {
+        self.connection
+            .execute(
+                "INSERT OR REPLACE INTO follower (worktree, branch) VALUES (?1, ?2)",
+                params![worktree, branch],
+            )
+            .map(|_| ())
+            .map_err(Error::store)
+    }
+
+    pub(crate) fn remove_follower(&self, worktree: &str) -> Result<(), Error> {
+        self.connection
+            .execute(
+                "DELETE FROM follower WHERE worktree = ?1",
+                params![worktree],
+            )
+            .map(|_| ())
+            .map_err(Error::store)
+    }
+
+    /// Every `(worktree, branch)` follower, sorted by worktree.
+    pub(crate) fn followers(&self) -> Result<Vec<(String, String)>, Error> {
+        let mut statement = self
+            .connection
+            .prepare("SELECT worktree, branch FROM follower ORDER BY worktree")
+            .map_err(Error::store)?;
+        let rows = statement
+            .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
             .map_err(Error::store)?;
         rows.collect::<Result<_, _>>().map_err(Error::store)
     }

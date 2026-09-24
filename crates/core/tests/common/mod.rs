@@ -76,3 +76,8 @@ pub fn parent(tree: &Tree, name: &str) -> Option<Parent> {
         .parent
         .clone()
 }
+
+/// A workspace opened from `path` (e.g. another worktree), in the fixture's sealed environment.
+pub fn workspace_at(fixture: &Fixture, path: &std::path::Path) -> Workspace {
+    Workspace::discover_with(path, Environment::Exactly(fixture.environment())).unwrap()
+}

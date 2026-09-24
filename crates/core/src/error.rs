@@ -105,6 +105,24 @@ pub enum Error {
     #[error("no such commit: {revision}")]
     UnknownRevision { revision: String },
 
+    #[error("{} already exists", path.display())]
+    PathExists { path: std::path::PathBuf },
+
+    /// Landing needs a follower: a worktree with a detached `HEAD`.
+    #[error("this worktree isn't detached; land from a follower worktree")]
+    NotDetached,
+
+    /// The current worktree follows no branch and none was named.
+    #[error("this worktree follows no branch; name the branch to land on")]
+    NotFollowing,
+
+    #[error("nothing to land on {branch}")]
+    NothingToLand { branch: String },
+
+    /// The follower's commits aren't built on `branch`'s current tip (it moved on or was rewritten meanwhile).
+    #[error("these commits aren't built on {branch}'s current tip; sync or rebase onto it first")]
+    NotFastForward { branch: String },
+
     #[error("{name} is already archived")]
     AlreadyArchived { name: String },
 

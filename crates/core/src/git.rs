@@ -30,6 +30,27 @@ pub(crate) struct FormerTip {
     pub left_by: String,
 }
 
+/// A worktree as `git worktree list` reports it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct WorktreeInfo {
+    pub path: PathBuf,
+    /// `None` for a bare repository or a worktree with no commits yet.
+    pub head: Option<String>,
+    /// The branch checked out; `None` when detached.
+    pub branch: Option<String>,
+    /// Whether this is the worktree the repository was opened from.
+    pub current: bool,
+}
+
+/// Moving a worktree's index and files from one commit to another, recorded so a crash can be rolled back.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Checkout {
+    /// `None` for the worktree the repository was opened from.
+    pub worktree: Option<PathBuf>,
+    pub from: String,
+    pub to: String,
+}
+
 /// The parts of a commit restack needs.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct CommitInfo {
@@ -141,18 +162,41 @@ pub(crate) trait GitRepo: Send + Sync {
     /// signs if the user's config says to). The committer is the current user.
     fn copy_commit(&self, original: &str, tree: &str, parent: &str) -> Result<String, Error>;
 
-    /// Whether tracked files in the working tree and index match `HEAD`. Untracked files are ignored.
-    fn is_worktree_clean(&self) -> Result<bool, Error>;
+    /// Whether tracked files in a worktree (`None`: this one) and its index match its `HEAD`. Untracked files are
+    /// ignored.
+    fn is_worktree_clean(&self, worktree: Option<&Path>) -> Result<bool, Error>;
 
-    /// Whether the index matches `commit`'s tree.
-    fn index_matches(&self, commit: &str) -> Result<bool, Error>;
+    /// Whether a worktree's (`None`: this one) index matches `commit`'s tree.
+    fn index_matches(&self, worktree: Option<&Path>, commit: &str) -> Result<bool, Error>;
 
-    /// Moves the index and working tree from commit `from` to commit `to` (`git read-tree -m -u`), without touching
-    /// refs. Fails without changes if that would overwrite local changes.
-    fn checkout(&self, from: &str, to: &str) -> Result<(), Error>;
+    /// Moves a worktree's (`None`: this one) index and files from commit `from` to commit `to`
+    /// (`git read-tree -m -u`), without touching refs. Local changes to files that differ between the two are refused,
+    /// without changes; others are carried along.
+    fn checkout(&self, worktree: Option<&Path>, from: &str, to: &str) -> Result<(), Error>;
+
+    /// Every worktree of this repository, the main one first.
+    fn worktrees(&self) -> Result<Vec<WorktreeInfo>, Error>;
 
     /// Branches checked out in other worktrees of this repository.
-    fn checked_out_elsewhere(&self) -> Result<Vec<String>, Error>;
+    fn checked_out_elsewhere(&self) -> Result<Vec<String>, Error> {
+        Ok(self
+            .worktrees()?
+            .into_iter()
+            .filter(|worktree| !worktree.current)
+            .filter_map(|worktree| worktree.branch)
+            .collect())
+    }
+
+    /// Adds a worktree at `path`: on `branch`, or detached at commit `detached` (`git worktree add`).
+    fn add_worktree(
+        &self,
+        path: &Path,
+        branch: Option<&str>,
+        detached: Option<&str>,
+    ) -> Result<(), Error>;
+
+    /// Points another worktree's detached `HEAD` at `commit`, without touching its files (`git update-ref --no-deref`).
+    fn set_detached_head(&self, worktree: &Path, commit: &str) -> Result<(), Error>;
 
     /// The names of this repository's remotes, sorted.
     fn remotes(&self) -> Result<Vec<String>, Error>;
@@ -207,10 +251,38 @@ impl GixRepo {
     /// redirect it. Other environment (signing agents, identity overrides) passes through.
     fn git(&self, args: &[&str]) -> Command {
         let repo = self.repo.to_thread_local();
+        let mut command = self.git_command();
+        command.arg("--git-dir").arg(repo.git_dir());
+        if let Some(workdir) = repo.workdir() {
+            command.arg("--work-tree").arg(workdir).current_dir(workdir);
+        }
+        command.args(args);
+        command
+    }
+
+    /// `git <args>` in another worktree (`None`: this repository's own, as [`Self::git`]), letting git find that
+    /// worktree's git dir.
+    fn git_at(&self, worktree: Option<&Path>, args: &[&str]) -> Command {
+        let Some(worktree) = worktree else {
+            return self.git(args);
+        };
+        let mut command = self.git_command();
+        command
+            .current_dir(worktree)
+            .arg("-C")
+            .arg(worktree)
+            .args(args);
+        command
+    }
+
+    /// A bare `git` command with [`Self::environment`] applied.
+    fn git_command(&self) -> Command {
         let mut command = Command::new("git");
         match &self.environment {
             Environment::Inherit => {
                 for variable in [
+                    "GIT_DIR",
+                    "GIT_WORK_TREE",
                     "GIT_INDEX_FILE",
                     "GIT_OBJECT_DIRECTORY",
                     "GIT_ALTERNATE_OBJECT_DIRECTORIES",
@@ -226,11 +298,6 @@ impl GixRepo {
                     .envs(variables.iter().map(|(key, value)| (key, value)));
             }
         }
-        command.arg("--git-dir").arg(repo.git_dir());
-        if let Some(workdir) = repo.workdir() {
-            command.arg("--work-tree").arg(workdir).current_dir(workdir);
-        }
-        command.args(args);
         command
     }
 
@@ -579,21 +646,24 @@ impl GitRepo for GixRepo {
         Ok(String::from_utf8_lossy(&stdout).trim().to_owned())
     }
 
-    fn is_worktree_clean(&self) -> Result<bool, Error> {
-        if self.repo.to_thread_local().workdir().is_none() {
+    fn is_worktree_clean(&self, worktree: Option<&Path>) -> Result<bool, Error> {
+        if worktree.is_none() && self.repo.to_thread_local().workdir().is_none() {
             return Ok(true);
         }
-        let mut command = self.git(&[
+        let args = [
             "--no-optional-locks",
             "status",
             "--porcelain",
             "--untracked-files=no",
-        ]);
-        Ok(run_ok(&mut command, b"")?.is_empty())
+        ];
+        Ok(run_ok(&mut self.git_at(worktree, &args), b"")?.is_empty())
     }
 
-    fn index_matches(&self, commit: &str) -> Result<bool, Error> {
-        let mut command = self.git(&["diff-index", "--cached", "--quiet", commit, "--"]);
+    fn index_matches(&self, worktree: Option<&Path>, commit: &str) -> Result<bool, Error> {
+        let mut command = self.git_at(
+            worktree,
+            &["diff-index", "--cached", "--quiet", commit, "--"],
+        );
         let output = run(&mut command, b"")?;
         match output.status.code() {
             Some(0) => Ok(true),
@@ -602,36 +672,78 @@ impl GitRepo for GixRepo {
         }
     }
 
-    fn checkout(&self, from: &str, to: &str) -> Result<(), Error> {
-        run_ok(&mut self.git(&["read-tree", "-m", "-u", from, to]), b"").map(|_| ())
+    fn checkout(&self, worktree: Option<&Path>, from: &str, to: &str) -> Result<(), Error> {
+        run_ok(
+            &mut self.git_at(worktree, &["read-tree", "-m", "-u", from, to]),
+            b"",
+        )
+        .map(|_| ())
     }
 
-    fn checked_out_elsewhere(&self) -> Result<Vec<String>, Error> {
+    fn worktrees(&self) -> Result<Vec<WorktreeInfo>, Error> {
         let repo = self.repo.to_thread_local();
-        let Some(here) = repo.workdir().map(|workdir| workdir.canonicalize()) else {
-            return Ok(Vec::new());
-        };
-        let here = here.map_err(Error::git)?;
+        let here = repo
+            .workdir()
+            .map(|workdir| workdir.canonicalize())
+            .transpose()
+            .map_err(Error::git)?;
         let listing = run_ok(&mut self.git(&["worktree", "list", "--porcelain"]), b"")?;
         let listing = String::from_utf8_lossy(&listing);
-        let mut branches = Vec::new();
-        for block in listing.split("\n\n") {
-            let mut path = None;
-            let mut branch = None;
+        let mut worktrees = Vec::new();
+        for block in listing
+            .split("\n\n")
+            .filter(|block| !block.trim().is_empty())
+        {
+            let mut info = WorktreeInfo {
+                path: PathBuf::new(),
+                head: None,
+                branch: None,
+                current: false,
+            };
             for line in block.lines() {
                 if let Some(value) = line.strip_prefix("worktree ") {
-                    path = Some(PathBuf::from(value));
+                    info.path = PathBuf::from(value);
+                } else if let Some(value) = line.strip_prefix("HEAD ") {
+                    info.head =
+                        Some(value.to_owned()).filter(|head| head.chars().any(|c| c != '0'));
                 } else if let Some(value) = line.strip_prefix("branch refs/heads/") {
-                    branch = Some(value.to_owned());
+                    info.branch = Some(value.to_owned());
                 }
             }
-            let elsewhere =
-                path.is_some_and(|path| path.canonicalize().map_or(true, |path| path != here));
-            if let (true, Some(branch)) = (elsewhere, branch) {
-                branches.push(branch);
-            }
+            info.current = here
+                .as_ref()
+                .is_some_and(|here| info.path.canonicalize().is_ok_and(|path| path == *here));
+            worktrees.push(info);
         }
-        Ok(branches)
+        Ok(worktrees)
+    }
+
+    fn add_worktree(
+        &self,
+        path: &Path,
+        branch: Option<&str>,
+        detached: Option<&str>,
+    ) -> Result<(), Error> {
+        let path = path.to_string_lossy();
+        let mut args = vec!["worktree", "add", "--quiet"];
+        match (branch, detached) {
+            (_, Some(commit)) => args.extend(["--detach", &path, commit]),
+            (Some(branch), None) => args.extend([&*path, branch]),
+            (None, None) => args.push(&path),
+        }
+        run_ok(&mut self.git(&args), b"").map(|_| ())
+    }
+
+    fn set_detached_head(&self, worktree: &Path, commit: &str) -> Result<(), Error> {
+        let args = [
+            "update-ref",
+            "--no-deref",
+            "-m",
+            "stack: follow",
+            "HEAD",
+            commit,
+        ];
+        run_ok(&mut self.git_at(Some(worktree), &args), b"").map(|_| ())
     }
 
     fn remotes(&self) -> Result<Vec<String>, Error> {

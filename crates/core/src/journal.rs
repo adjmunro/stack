@@ -7,7 +7,7 @@ use std::collections::BTreeSet;
 use std::path::PathBuf;
 use std::sync::{Mutex, MutexGuard};
 
-use crate::git::{GitRepo, RefUpdate};
+use crate::git::{Checkout, GitRepo, RefUpdate};
 use crate::metadata;
 use crate::store::{Record, Store};
 use crate::{
@@ -64,15 +64,37 @@ impl Journal {
         kind: OperationKind,
         description: &str,
         target: Option<i64>,
-        mut updates: Vec<RefUpdate>,
+        updates: Vec<RefUpdate>,
     ) -> Result<i64, Error> {
-        let checkout = plan_checkout(git, &updates)?;
+        self.transact_with(git, kind, description, target, updates, None)
+    }
+
+    /// As [`Self::transact`], but `holder` names another worktree that has a branch checked out: instead of refusing
+    /// to move that branch, its worktree's files move with it (carrying local changes that don't clash).
+    pub(crate) fn transact_with(
+        &self,
+        git: &dyn GitRepo,
+        kind: OperationKind,
+        description: &str,
+        target: Option<i64>,
+        mut updates: Vec<RefUpdate>,
+        holder: Option<(&str, Checkout)>,
+    ) -> Result<i64, Error> {
+        let checkout = match holder {
+            Some((branch, checkout)) => {
+                plan_checkout(git, &updates, Some(branch))?;
+                Some(checkout)
+            }
+            None => plan_checkout(git, &updates, None)?,
+        };
         updates.extend(keep_update(git, &updates)?);
         let mut guard = self.store(true)?.expect("store created");
         let store = guard.as_mut().expect("store opened");
         let id = store.begin(kind, description, target, &updates, checkout.as_ref())?;
-        if let Some((from, to)) = &checkout {
-            if let Err(error) = git.checkout(from, to) {
+        if let Some(checkout) = &checkout {
+            if let Err(error) =
+                git.checkout(checkout.worktree.as_deref(), &checkout.from, &checkout.to)
+            {
                 store.finish(id, OperationState::Failed)?;
                 return Err(error);
             }
@@ -201,12 +223,15 @@ impl Journal {
     }
 }
 
-/// The working-tree move `(from, to)` needed because `updates` move the checked-out branch, if they do.
+/// The move of this worktree needed because `updates` move its checked-out branch, if they do. Refuses branches
+/// checked out in other worktrees, except `held_elsewhere`, whose move the caller arranges.
 fn plan_checkout(
     git: &dyn GitRepo,
     updates: &[RefUpdate],
-) -> Result<Option<(String, String)>, Error> {
-    let elsewhere = git.checked_out_elsewhere()?;
+    held_elsewhere: Option<&str>,
+) -> Result<Option<Checkout>, Error> {
+    let mut elsewhere = git.checked_out_elsewhere()?;
+    elsewhere.retain(|branch| Some(branch.as_str()) != held_elsewhere);
     if let Some(update) = updates.iter().find(|update| {
         update
             .name
@@ -235,10 +260,14 @@ fn plan_checkout(
     if update.old.as_deref() != Some(commit.as_str()) || *new == commit {
         return Ok(None);
     }
-    if !git.is_worktree_clean()? {
+    if !git.is_worktree_clean(None)? {
         return Err(Error::DirtyWorktree { branch: name });
     }
-    Ok(Some((commit, new.clone())))
+    Ok(Some(Checkout {
+        worktree: None,
+        from: commit,
+        to: new.clone(),
+    }))
 }
 
 /// An update to [`KEEP`] adding every metadata blob `updates` stop referencing, if any are new to it. Other refs
@@ -293,8 +322,14 @@ fn resolve_pending(
         RecoveryOutcome::Completed
     } else if all_old {
         // The working tree may already have moved ahead of the refs; move it back.
-        if let Some((from, to)) = &record.checkout {
-            if git.index_matches(to)? && git.checkout(to, from).is_err() {
+        if let Some(checkout) = &record.checkout {
+            let worktree = checkout.worktree.as_deref();
+            let moved = git.index_matches(worktree, &checkout.to)?;
+            if moved
+                && git
+                    .checkout(worktree, &checkout.to, &checkout.from)
+                    .is_err()
+            {
                 return Ok(RecoveryOutcome::Inconsistent);
             }
         }
@@ -405,17 +440,28 @@ mod tests {
         fn copy_commit(&self, original: &str, tree: &str, parent: &str) -> Result<String, Error> {
             self.inner.copy_commit(original, tree, parent)
         }
-        fn is_worktree_clean(&self) -> Result<bool, Error> {
-            self.inner.is_worktree_clean()
+        fn is_worktree_clean(&self, worktree: Option<&Path>) -> Result<bool, Error> {
+            self.inner.is_worktree_clean(worktree)
         }
-        fn index_matches(&self, commit: &str) -> Result<bool, Error> {
-            self.inner.index_matches(commit)
+        fn index_matches(&self, worktree: Option<&Path>, commit: &str) -> Result<bool, Error> {
+            self.inner.index_matches(worktree, commit)
         }
-        fn checkout(&self, from: &str, to: &str) -> Result<(), Error> {
-            self.inner.checkout(from, to)
+        fn checkout(&self, worktree: Option<&Path>, from: &str, to: &str) -> Result<(), Error> {
+            self.inner.checkout(worktree, from, to)
         }
-        fn checked_out_elsewhere(&self) -> Result<Vec<String>, Error> {
-            self.inner.checked_out_elsewhere()
+        fn worktrees(&self) -> Result<Vec<crate::git::WorktreeInfo>, Error> {
+            self.inner.worktrees()
+        }
+        fn add_worktree(
+            &self,
+            path: &Path,
+            branch: Option<&str>,
+            detached: Option<&str>,
+        ) -> Result<(), Error> {
+            self.inner.add_worktree(path, branch, detached)
+        }
+        fn set_detached_head(&self, worktree: &Path, commit: &str) -> Result<(), Error> {
+            self.inner.set_detached_head(worktree, commit)
         }
         fn remotes(&self) -> Result<Vec<String>, Error> {
             self.inner.remotes()
@@ -640,6 +686,62 @@ mod tests {
             diff.refs.is_empty() && diff.index.is_empty() && diff.worktree.is_empty(),
             "{diff}"
         );
+    }
+
+    #[test]
+    fn crash_after_moving_another_worktree_moves_it_back() {
+        let fixture = Fixture::new();
+        let old = fixture.commit("base.txt", "base", "feat: base");
+        fixture.git(&["switch", "--quiet", "--create", "other"]);
+        let new = fixture.commit("other.txt", "other", "feat: other");
+        // develop is checked out in a second worktree; this one stays on other.
+        let holder = fixture.scratch_path("holder");
+        fixture.git(&[
+            "worktree",
+            "add",
+            "--quiet",
+            holder.to_str().unwrap(),
+            "develop",
+        ]);
+        let crashing = Crashing {
+            inner: gix(&fixture),
+            apply_refs: false,
+        };
+        let journal = Journal::new(journal_path(&fixture));
+        let update = RefUpdate {
+            name: "refs/heads/develop".into(),
+            old: Some(old.clone()),
+            new: Some(new.clone()),
+        };
+        let checkout = Checkout {
+            worktree: Some(holder.clone()),
+            from: old,
+            to: new,
+        };
+        let crashed = catch_unwind(AssertUnwindSafe(|| {
+            let held = Some(("develop", checkout));
+            journal.transact_with(
+                &crashing,
+                OperationKind::Command,
+                "land",
+                None,
+                vec![update],
+                held,
+            )
+        }));
+        assert!(crashed.is_err());
+        assert!(
+            holder.join("other.txt").exists(),
+            "holder moved before the crash"
+        );
+
+        let recovered = Journal::new(journal_path(&fixture))
+            .recover(&gix(&fixture))
+            .unwrap();
+
+        assert_eq!(recovered[0].outcome, RecoveryOutcome::RolledBack);
+        assert!(!holder.join("other.txt").exists());
+        assert_eq!(fixture.git_in(&holder, &["status", "--porcelain"]), "");
     }
 
     #[test]

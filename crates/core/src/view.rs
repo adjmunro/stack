@@ -283,6 +283,74 @@ pub struct CommitReview {
     pub marks: Vec<ReviewMark>,
 }
 
+/// A worktree of the repository.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct Worktree {
+    pub path: std::path::PathBuf,
+    /// The commit checked out; `None` before the first commit.
+    pub head: Option<String>,
+    /// The branch checked out; `None` when detached.
+    pub branch: Option<String>,
+    /// For a follower: the branch it follows and how it stands against it.
+    pub follows: Option<Following>,
+    /// Whether this is the worktree the workspace was opened from.
+    pub current: bool,
+}
+
+/// A follower worktree's branch and position. See the glossary's "follower".
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct Following {
+    pub branch: String,
+    pub position: FollowPosition,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FollowPosition {
+    /// At the branch's tip.
+    UpToDate,
+    /// Behind or off the branch's tip (e.g. it moved on or was restacked); a sync brings it up to date.
+    Behind,
+    /// Has commits of its own on top of the branch's tip, ready to land.
+    Ahead,
+    /// The branch no longer exists.
+    Orphaned,
+}
+
+/// What a follower sync did to one follower.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct FollowerSync {
+    pub path: std::path::PathBuf,
+    pub branch: String,
+    pub outcome: SyncOutcome,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum SyncOutcome {
+    Moved {
+        from: String,
+        to: String,
+    },
+    UpToDate,
+    /// Left alone, e.g. because it has commits to land or local changes that clash.
+    Skipped {
+        reason: String,
+    },
+}
+
+/// The result of [`crate::Workspace::land`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct Landed {
+    pub branch: String,
+    pub old: String,
+    pub new: String,
+    /// Commits added to the branch.
+    pub commits: usize,
+    /// The worktree that has the branch checked out, whose files moved with it.
+    pub holder: Option<std::path::PathBuf>,
+}
+
 /// The result of [`crate::Workspace::push`].
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Pushed {
