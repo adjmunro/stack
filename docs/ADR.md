@@ -164,3 +164,9 @@
 - Detail: A `Forge` port, with a `gh` CLI adapter run in the current worktree using the user's `gh` login. `stack pr` pushes the line, then per branch: finds its latest pull request; creates one (`gh pr create --head <b> --base <parent> --fill`) if none; retargets an open one whose base isn't the branch's parent; leaves merged/closed ones and rejected pushes alone.
 - Detail: A branch whose parent isn't on the remote is skipped with a reason rather than targeted at a guess.
 - Reason: `gh` handles auth, hosts, and templates; the port keeps other forges and a GUI's own client possible. Tests use a fake `gh` on `PATH`.
+
+2026-09-24T12:28Z@06e4d558
+- Category: push guard
+- Detail: `stack guard install` makes a `pre-push` hook (in `git rev-parse --git-path hooks`, so `core.hooksPath` is honoured) that runs `<absolute path to stack> guard check-push`. An existing hook moves to `pre-push.before-stack` and runs after the checks pass; uninstall restores it.
+- Detail: Refused: pushing to or deleting a protected branch (root trunks, plus `stack.protect` values), and pushing a branch or bare commit to a branch of another name. A human can allow each by typing the branch name at `/dev/tty`; with no terminal, or `STACK_GUARD_PROMPT=never`, the push is refused.
+- Reason: Agents run plain `git push` with the human's credentials (and admin bypasses). A hook covers every push, not just `stack`'s, and a terminal confirmation is a step an unattended agent can't take. `git push --no-verify` still skips hooks; stronger enforcement needs separate agent credentials (IDEAS).
